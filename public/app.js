@@ -911,7 +911,7 @@ async function loadPOBasket() {
                 <td>${typeBadge}</td>
                 <td class="${it.current_stock === 0 ? 'stock-zero' : 'stock-low'}">${it.current_stock === 0 ? '⛔ OUT' : it.current_stock}</td>
                 <td>${it.unit_cost ? fmtMYR(it.unit_cost) : '<span class="muted">TBD</span>'}</td>
-                <td><input type="number" class="editable basket-qty" min="1" value="${qty}" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
+                <td><input type="number" class="editable basket-qty" min="0" value="${qty}" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
                 <td class="basket-subtotal"><strong>${fmtMYR((it.unit_cost || 0) * qty)}</strong></td>
                 <td><button class="btn btn-red btn-sm" onclick="removeBasketItem(${i})" title="Remove from basket">✕</button></td>
               </tr>
