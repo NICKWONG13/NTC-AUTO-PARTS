@@ -29,28 +29,21 @@ let bot;
 // Serverless (Vercel) must use webhook. Local/dev uses polling.
 const isServerless = !!process.env.VERCEL || process.env.NODE_ENV === 'production';
 
-if (process.env.TELEGRAM_TOKEN) {
+const TELEGRAM_TOKEN = (process.env.TELEGRAM_TOKEN || '').trim();
+
+if (TELEGRAM_TOKEN) {
   if (isServerless) {
-    bot = new TelegramBot(process.env.TELEGRAM_TOKEN);
-    // Simple fixed path — token is verified via secret_token header instead
-    const WEBHOOK_SECRET = process.env.TELEGRAM_TOKEN.replace(/:/g, '');
+    bot = new TelegramBot(TELEGRAM_TOKEN);
+    const WEBHOOK_SECRET = TELEGRAM_TOKEN.replace(/:/g, '');
     app.post('/tg/webhook', (req, res) => {
       const secret = req.get('x-telegram-bot-api-secret-token');
-      if (secret !== WEBHOOK_SECRET) {
-        return res.status(401).json({
-          error: 'unauthorized',
-          got_len: secret ? secret.length : 0,
-          expected_len: WEBHOOK_SECRET.length,
-          got_start: secret ? secret.slice(0, 5) : null,
-          expected_start: WEBHOOK_SECRET.slice(0, 5)
-        });
-      }
+      if (secret !== WEBHOOK_SECRET) return res.sendStatus(401);
       bot.processUpdate(req.body);
       res.sendStatus(200);
     });
     console.log('Telegram bot in webhook mode');
   } else {
-    bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+    bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
     console.log('Telegram bot in polling mode');
   }
   setupHandler(bot);
