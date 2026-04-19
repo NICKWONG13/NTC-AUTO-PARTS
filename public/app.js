@@ -37,6 +37,7 @@ function showTab(name) {
   else if (name === 'quotations') loadQuotations();
   else if (name === 'customers') loadCustomers();
   else if (name === 'products') loadProducts();
+  else if (name === 'purchase-orders') { loadPOBasket(); loadPOList(); }
   else if (name === 'settings') loadSettings();
 }
 
@@ -46,6 +47,8 @@ function refreshAll() {
   else if (currentTab === 'quotations') loadQuotations();
   else if (currentTab === 'customers') loadCustomers();
   else if (currentTab === 'products') loadProducts();
+  else if (currentTab === 'purchase-orders') { loadPOBasket(); loadPOList(); }
+  refreshPOBadge(); // always refresh basket count badge
   document.getElementById('last-refresh').textContent = 'Refreshed ' + new Date().toLocaleTimeString();
 }
 
@@ -826,3 +829,212 @@ async function sendReminder() {
     toast('Failed to send reminder: ' + e.message, 'error');
   }
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+//  PURCHASE ORDERS
+// ═════════════════════════════════════════════════════════════════════════
+
+let basketItems = [];
+
+async function refreshPOBadge() {
+  try {
+    const { items } = await api('/purchase-orders/basket');
+    const badge = document.getElementById('badge-po-basket');
+    if (items.length > 0) {
+      badge.textContent = items.length;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  } catch {}
+}
+
+async function loadPOBasket() {
+  const list = document.getElementById('po-basket-list');
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const { threshold, items } = await api('/purchase-orders/basket');
+    basketItems = items;
+
+    const badge = document.getElementById('basket-count');
+    const tabBadge = document.getElementById('badge-po-basket');
+    if (items.length > 0) {
+      badge.textContent = items.length; badge.classList.remove('hidden');
+      tabBadge.textContent = items.length; tabBadge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden'); tabBadge.classList.add('hidden');
+    }
+
+    if (items.length === 0) {
+      list.innerHTML = `<div class="empty">✅ All stocks above reorder threshold (qty ≥ ${threshold}). Nothing to restock.</div>`;
+      return;
+    }
+
+    list.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="width:30px"><input type="checkbox" id="basket-select-all" checked onchange="togglePOSelectAll(this.checked)"></th>
+            <th>Part No.</th>
+            <th>Description</th>
+            <th>Current Stock</th>
+            <th>Unit Cost</th>
+            <th>Order Qty</th>
+            <th>Subtotal</th>
+          </tr></thead>
+          <tbody>
+            ${items.map((it, i) => `
+              <tr data-idx="${i}">
+                <td><input type="checkbox" class="basket-chk" checked></td>
+                <td><strong>${it.part_number}</strong></td>
+                <td>${it.description || '-'}</td>
+                <td class="${it.current_stock === 0 ? 'stock-zero' : 'stock-low'}">${it.current_stock === 0 ? '⛔ OUT' : it.current_stock}</td>
+                <td>${fmtMYR(it.unit_cost)}</td>
+                <td><input type="number" class="editable basket-qty" min="1" value="${it.suggested_qty}" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
+                <td class="basket-subtotal"><strong>${fmtMYR((it.unit_cost || 0) * it.suggested_qty)}</strong></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    list.innerHTML = `<div class="alert alert-error">Failed: ${e.message}</div>`;
+  }
+}
+
+function togglePOSelectAll(checked) {
+  document.querySelectorAll('.basket-chk').forEach(c => c.checked = checked);
+}
+
+function updateBasketSubtotal(i) {
+  const row = document.querySelector(`#po-basket-list tr[data-idx="${i}"]`);
+  const qty = parseInt(row.querySelector('.basket-qty').value, 10) || 0;
+  const cost = basketItems[i].unit_cost || 0;
+  row.querySelector('.basket-subtotal').innerHTML = `<strong>${fmtMYR(cost * qty)}</strong>`;
+}
+
+async function createPOFromBasket() {
+  const rows = document.querySelectorAll('#po-basket-list tr[data-idx]');
+  const items = [];
+  rows.forEach(row => {
+    const i = parseInt(row.dataset.idx, 10);
+    const checked = row.querySelector('.basket-chk').checked;
+    if (!checked) return;
+    const qty = parseInt(row.querySelector('.basket-qty').value, 10) || 1;
+    const it = basketItems[i];
+    items.push({
+      part_number: it.part_number,
+      description: it.description,
+      qty,
+      unit_cost: it.unit_cost,
+      current_stock: it.current_stock
+    });
+  });
+
+  if (!items.length) { toast('Select at least one item.', 'error'); return; }
+
+  const supplier = prompt('Supplier name (optional):') || null;
+
+  try {
+    const po = await api('/purchase-orders', {
+      method: 'POST',
+      body: JSON.stringify({ items, supplier })
+    });
+    toast(`✓ Purchase Order ${po.po_number} created with ${items.length} items`);
+    loadPOBasket();
+    loadPOList();
+  } catch (e) {
+    toast('Failed to create PO: ' + e.message, 'error');
+  }
+}
+
+async function loadPOList() {
+  const status = document.getElementById('po-status-filter')?.value || '';
+  const list = document.getElementById('po-list');
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const data = await api(`/purchase-orders${status ? '?status=' + status : ''}`);
+    if (!data.length) { list.innerHTML = '<div class="empty">No purchase orders yet.</div>'; return; }
+
+    const statusColor = { draft: 'pending', sent: 'pending', received: 'won', cancelled: 'lost' };
+    list.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>PO #</th><th>Supplier</th><th>Total</th>
+            <th>Status</th><th>Created</th><th>Actions</th>
+          </tr></thead>
+          <tbody>
+            ${data.map(po => `
+              <tr>
+                <td><a href="javascript:showPODetail('${po.id}')"><strong>${po.po_number}</strong></a></td>
+                <td>${po.supplier || '-'}</td>
+                <td>${fmtMYR(po.total_amount)}</td>
+                <td><span class="status status-${statusColor[po.status]}">${po.status.toUpperCase()}</span></td>
+                <td>${fmtDate(po.created_at)}</td>
+                <td>
+                  ${po.status === 'draft' ? `<button class="btn btn-primary btn-sm" onclick="updatePOStatus('${po.id}','sent')">Mark Sent</button>` : ''}
+                  ${po.status === 'sent' ? `<button class="btn btn-green btn-sm" onclick="updatePOStatus('${po.id}','received')">✓ Received</button>` : ''}
+                  ${po.status !== 'received' && po.status !== 'cancelled' ? `<button class="btn btn-red btn-sm" onclick="updatePOStatus('${po.id}','cancelled')">Cancel</button>` : ''}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    list.innerHTML = `<div class="alert alert-error">Failed: ${e.message}</div>`;
+  }
+}
+
+async function showPODetail(id) {
+  try {
+    const po = await api(`/purchase-orders/${id}`);
+    document.getElementById('modal-content').innerHTML = `
+      <div class="quote-detail">
+        <h3>📦 ${po.po_number}</h3>
+        <p class="muted" style="margin-bottom:12px">
+          Supplier: <strong>${po.supplier || '-'}</strong>
+          &nbsp;|&nbsp; ${fmtDate(po.created_at)}
+          &nbsp;|&nbsp; <span class="status status-${po.status === 'received' ? 'won' : (po.status === 'cancelled' ? 'lost' : 'pending')}">${po.status.toUpperCase()}</span>
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Part No.</th><th>Description</th><th>Qty</th><th>Unit Cost</th><th>Subtotal</th></tr></thead>
+            <tbody>
+              ${po.items.map((it, i) => `
+                <tr>
+                  <td>${i + 1}</td>
+                  <td><strong>${it.part_number}</strong></td>
+                  <td>${it.description || '-'}</td>
+                  <td>${it.qty}</td>
+                  <td>${fmtMYR(it.unit_cost)}</td>
+                  <td><strong>${fmtMYR(it.subtotal)}</strong></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="quote-total" style="text-align:right">Total: <strong>${fmtMYR(po.total_amount)}</strong></div>
+        ${po.notes ? `<p class="muted" style="margin-top:6px;font-size:12px">Notes: ${po.notes}</p>` : ''}
+      </div>
+    `;
+    document.getElementById('modal').classList.remove('hidden');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function updatePOStatus(id, status) {
+  if (!confirm(`Change status to "${status}"?${status === 'received' ? ' Stock will be topped up.' : ''}`)) return;
+  try {
+    await api(`/purchase-orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    toast(`✓ PO marked as ${status}`);
+    loadPOList();
+    if (status === 'received') loadPOBasket(); // stock changed → basket may update
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Refresh PO badge on initial load and every 60s
+refreshPOBadge();
+setInterval(refreshPOBadge, 60000);

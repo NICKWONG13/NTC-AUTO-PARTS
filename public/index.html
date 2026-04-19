@@ -32,6 +32,7 @@
     <button class="tab" onclick="showTab('quotations')">📋 Quotations</button>
     <button class="tab" onclick="showTab('customers')">👥 Customers</button>
     <button class="tab" onclick="showTab('products')">💰 Products</button>
+    <button class="tab" onclick="showTab('purchase-orders')">📦 Purchase Orders <span id="badge-po-basket" class="badge hidden"></span></button>
     <button class="tab" onclick="showTab('settings')">⚙️ Settings</button>
   </nav>
 
@@ -195,6 +196,39 @@
           <button class="btn btn-ghost btn-sm" onclick="hideAddProduct()">Cancel</button>
         </div>
         <div id="products-list"></div>
+      </div>
+    </section>
+
+    <!-- PURCHASE ORDERS TAB -->
+    <section id="tab-purchase-orders" class="tab-content">
+      <div class="panel">
+        <div class="panel-header">
+          <h2>🛒 Auto Restock Basket <span id="basket-count" class="badge hidden"></span></h2>
+          <div class="product-actions">
+            <button class="btn btn-outline btn-sm" onclick="loadPOBasket()">↻ Refresh</button>
+            <button class="btn btn-primary btn-sm" onclick="createPOFromBasket()">📦 Create Purchase Order</button>
+          </div>
+        </div>
+        <p class="muted" style="margin-bottom:10px">
+          Items with stock below threshold are auto-added here. Review quantities, then create a PO.
+        </p>
+        <div id="po-basket-list"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h2>📋 Purchase Orders</h2>
+          <div class="filter-row">
+            <select id="po-status-filter" onchange="loadPOList()">
+              <option value="">All Status</option>
+              <option value="draft">Draft</option>
+              <option value="sent">Sent</option>
+              <option value="received">Received</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+        </div>
+        <div id="po-list"></div>
       </div>
     </section>
 

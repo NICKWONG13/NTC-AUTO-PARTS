@@ -28,6 +28,7 @@ app.use('/api/quotations', require('./api/quotations'));
 app.use('/api/customers', require('./api/customers'));
 app.use('/api/dashboard', require('./api/dashboard'));
 app.use('/api/settings', require('./api/settings'));
+app.use('/api/purchase-orders', require('./api/purchase-orders'));
 
 // Manual follow-up reminder trigger from dashboard
 app.post('/api/remind', async (req, res) => {
