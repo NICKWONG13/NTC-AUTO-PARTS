@@ -36,8 +36,15 @@ if (process.env.TELEGRAM_TOKEN) {
     const WEBHOOK_SECRET = process.env.TELEGRAM_TOKEN.replace(/:/g, '');
     app.post('/tg/webhook', (req, res) => {
       const secret = req.get('x-telegram-bot-api-secret-token');
-      console.log('[webhook] secret received:', secret ? secret.slice(0,10)+'...' : 'NONE', '| expected:', WEBHOOK_SECRET.slice(0,10)+'...', '| match:', secret === WEBHOOK_SECRET);
-      if (secret !== WEBHOOK_SECRET) return res.sendStatus(401);
+      if (secret !== WEBHOOK_SECRET) {
+        return res.status(401).json({
+          error: 'unauthorized',
+          got_len: secret ? secret.length : 0,
+          expected_len: WEBHOOK_SECRET.length,
+          got_start: secret ? secret.slice(0, 5) : null,
+          expected_start: WEBHOOK_SECRET.slice(0, 5)
+        });
+      }
       bot.processUpdate(req.body);
       res.sendStatus(200);
     });
