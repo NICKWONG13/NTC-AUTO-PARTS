@@ -3,7 +3,7 @@ const express = require('express');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
-const { setupHandler, sendFollowUpReminder } = require('./bot/handler');
+const { setupHandler, sendFollowUpReminder, processUpdate } = require('./bot/handler');
 const supabase = require('./db/supabase');
 
 const app = express();
@@ -35,18 +35,23 @@ if (TELEGRAM_TOKEN) {
   if (isServerless) {
     bot = new TelegramBot(TELEGRAM_TOKEN);
     const WEBHOOK_SECRET = TELEGRAM_TOKEN.replace(/:/g, '');
-    app.post('/tg/webhook', (req, res) => {
+    // Direct async handler — await processUpdate so Vercel doesn't kill the function
+    app.post('/tg/webhook', async (req, res) => {
       const secret = req.get('x-telegram-bot-api-secret-token');
       if (secret !== WEBHOOK_SECRET) return res.sendStatus(401);
-      bot.processUpdate(req.body);
+      try {
+        await processUpdate(bot, req.body);
+      } catch (e) {
+        console.error('[webhook] processUpdate failed:', e.message);
+      }
       res.sendStatus(200);
     });
     console.log('Telegram bot in webhook mode');
   } else {
     bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+    setupHandler(bot);
     console.log('Telegram bot in polling mode');
   }
-  setupHandler(bot);
 } else {
   console.warn('⚠️  TELEGRAM_TOKEN not set — bot disabled. Fill in .env to enable.');
 }
