@@ -41,15 +41,26 @@ function showTab(name) {
   else if (name === 'settings') loadSettings();
 }
 
-function refreshAll() {
-  if (currentTab === 'overview') loadOverview();
-  else if (currentTab === 'followups') loadFollowups();
-  else if (currentTab === 'quotations') loadQuotations();
-  else if (currentTab === 'customers') loadCustomers();
-  else if (currentTab === 'products') loadProducts();
-  else if (currentTab === 'purchase-orders') { loadPOBasket(); loadPOList(); }
-  refreshPOBadge(); // always refresh basket count badge
-  document.getElementById('last-refresh').textContent = 'Refreshed ' + new Date().toLocaleTimeString();
+async function refreshAll() {
+  const label = document.getElementById('last-refresh');
+  label.textContent = 'Refreshing…';
+
+  try {
+    if (currentTab === 'overview')              await loadOverview();
+    else if (currentTab === 'followups')        await loadFollowups();
+    else if (currentTab === 'quotations')       await loadQuotations();
+    else if (currentTab === 'customers')        await loadCustomers();
+    else if (currentTab === 'products')         await loadProducts();
+    else if (currentTab === 'purchase-orders')  { await loadPOBasket(); await loadPOList(); }
+    else if (currentTab === 'settings')         await loadSettings();
+
+    await refreshPOBadge();
+    label.textContent = 'Refreshed ' + new Date().toLocaleTimeString();
+    toast('✓ Refreshed');
+  } catch (e) {
+    label.textContent = 'Refresh failed';
+    toast('Refresh failed: ' + e.message, 'error');
+  }
 }
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
