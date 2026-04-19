@@ -932,20 +932,34 @@ function togglePOSelectAll(checked) {
 async function removeBasketItem(i) {
   const it = basketItems[i];
   if (!it) return;
-  const isRequested = (it.description || '').startsWith('[REQUESTED]');
-  const msg = isRequested
-    ? `Delete customer-requested part "${it.part_number}" from basket? (This removes the demand record.)`
-    : `Dismiss "${it.part_number}" from basket? (It will come back once stock changes.)`;
-  if (!confirm(msg)) return;
+
+  // Optimistically remove row from DOM — no full reload
+  const row = document.querySelector(`#po-basket-list tr[data-idx="${i}"]`);
+  if (row) row.remove();
+
+  // Update counter badges locally
+  const remaining = document.querySelectorAll('#po-basket-list tr[data-idx]').length;
+  const badge = document.getElementById('basket-count');
+  const tabBadge = document.getElementById('badge-po-basket');
+  if (remaining > 0) {
+    badge.textContent = remaining; badge.classList.remove('hidden');
+    tabBadge.textContent = remaining; tabBadge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden'); tabBadge.classList.add('hidden');
+    document.getElementById('po-basket-list').innerHTML =
+      '<div class="empty">✅ All items removed. Click Refresh to reload the basket.</div>';
+  }
+
+  // Fire-and-forget to DB
   try {
     await api(`/purchase-orders/basket/dismiss`, {
       method: 'POST',
       body: JSON.stringify({ part_number: it.part_number })
     });
     toast(`✓ Removed ${it.part_number}`);
-    loadPOBasket();
-    refreshPOBadge();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) {
+    toast(`Failed to persist removal: ${e.message}`, 'error');
+  }
 }
 
 function updateBasketSubtotal(i) {
