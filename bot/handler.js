@@ -129,6 +129,12 @@ async function getOrCreateCustomer(msg) {
 
 // ─── Save quotation ──────────────────────────────────────────────────────────
 async function saveQuotation(customerId, chatId, quoteNumber, items, total, hasTbd) {
+  // If any item has multiple matches, store pending selections in notes
+  const pending = items
+    .filter(i => i.matches && i.matches.length > 1)
+    .map(i => ({ raw_query: i.raw_query, qty: i.qty, matches: i.matches }));
+  const notes = pending.length ? JSON.stringify({ pending }) : null;
+
   const { data: quotation } = await supabase
     .from('quotations')
     .insert({
@@ -137,7 +143,8 @@ async function saveQuotation(customerId, chatId, quoteNumber, items, total, hasT
       telegram_chat_id: chatId,
       total_amount: total,
       has_tbd: hasTbd,
-      status: 'pending'
+      status: 'pending',
+      notes
     })
     .select('id')
     .single();
@@ -156,6 +163,30 @@ async function saveQuotation(customerId, chatId, quoteNumber, items, total, hasT
 
   await supabase.from('quotation_items').insert(rows);
   return quotation.id;
+}
+
+// Load customer's latest pending-selection quotation
+async function getPendingSelection(telegramId) {
+  const { data: customer } = await supabase
+    .from('customers')
+    .select('id')
+    .eq('telegram_id', telegramId)
+    .single();
+  if (!customer) return null;
+
+  const { data: quotes } = await supabase
+    .from('quotations')
+    .select('id, quote_number, notes, created_at')
+    .eq('customer_id', customer.id)
+    .eq('status', 'pending')
+    .not('notes', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (!quotes || !quotes.length) return null;
+  try {
+    return { quotation: quotes[0], data: JSON.parse(quotes[0].notes) };
+  } catch { return null; }
 }
 
 // ─── Notify sales ────────────────────────────────────────────────────────────
@@ -308,15 +339,66 @@ function setupHandler(bot) {
     if (!msg.text || msg.text.startsWith('/')) return;
 
     const chatId = msg.chat.id;
-    const rawItems = parseItems(msg.text);
+    const raw = msg.text.trim();
 
-    if (rawItems.length === 0) {
-      bot.sendMessage(chatId, HELP_TEXT, { parse_mode: 'Markdown' });
-      return;
-    }
+    // Check for letter-selection pattern: "A", "a", "A 2", "A,B,C"
+    const letterMatch = raw.match(/^([A-Za-z])(?:\s+(\d+))?$/);
+    const multiLetterMatch = raw.match(/^([A-Za-z](?:\s*[,+\s]\s*[A-Za-z])+)$/);
 
     try {
-      // Fill missing descriptions from product catalog
+      if (letterMatch || multiLetterMatch) {
+        const pending = await getPendingSelection(msg.from.id);
+        if (!pending || !pending.data.pending?.length) {
+          bot.sendMessage(chatId, '⚠️ No pending selections found. Please send your part number or search query first.');
+          return;
+        }
+
+        // Resolve each letter → actual part
+        const letters = letterMatch
+          ? [{ letter: letterMatch[1].toUpperCase(), qty: parseInt(letterMatch[2], 10) || null }]
+          : raw.split(/[,+\s]+/).filter(Boolean).map(l => ({ letter: l.toUpperCase(), qty: null }));
+
+        const pendingGroup = pending.data.pending[0]; // most recent multi-match group
+        const resolved = [];
+        for (const { letter, qty } of letters) {
+          const idx = letter.charCodeAt(0) - 65;
+          if (idx < 0 || idx >= pendingGroup.matches.length) {
+            bot.sendMessage(chatId, `⚠️ Invalid letter "${letter}". Available: A–${String.fromCharCode(64 + pendingGroup.matches.length)}.`);
+            return;
+          }
+          const match = pendingGroup.matches[idx];
+          resolved.push({
+            part_number: match.part_number,
+            description: match.description,
+            qty: qty ?? pendingGroup.qty ?? 1,
+            unit_price: match.unit_price,
+            price_source: match.price_source,
+            matches: [match]
+          });
+        }
+
+        // Mark previous pending quotation as superseded
+        await supabase.from('quotations').update({ notes: null, status: 'lost' }).eq('id', pending.quotation.id);
+
+        const quoteNumber = await generateQuoteNumber();
+        const { text, total, hasTbd } = buildQuotationText(quoteNumber, resolved);
+        await bot.sendMessage(chatId, `✅ *Selection confirmed!*\n\n${text}`, { parse_mode: 'Markdown' });
+
+        const customerId = await getOrCreateCustomer(msg);
+        await saveQuotation(customerId, chatId, quoteNumber, resolved, total, hasTbd);
+
+        const customerName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Unknown';
+        await notifySales(bot, salesChatId(), quoteNumber, customerName, text);
+        return;
+      }
+
+      // Normal flow — parse as items
+      const rawItems = parseItems(raw);
+      if (rawItems.length === 0) {
+        bot.sendMessage(chatId, HELP_TEXT, { parse_mode: 'Markdown' });
+        return;
+      }
+
       const enriched = await enrichDescriptions(rawItems);
       const pricedItems = await lookupPrices(enriched);
       const quoteNumber = await generateQuoteNumber();
