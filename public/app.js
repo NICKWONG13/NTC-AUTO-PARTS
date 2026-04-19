@@ -882,6 +882,7 @@ async function loadPOBasket() {
             <th>Unit Cost</th>
             <th>Order Qty</th>
             <th>Subtotal</th>
+            <th style="width:50px"></th>
           </tr></thead>
           <tbody>
             ${items.map((it, i) => {
@@ -890,6 +891,7 @@ async function loadPOBasket() {
               const typeBadge = isRequested
                 ? '<span class="status status-pending" style="font-size:10px">🔔 CUSTOMER REQUEST</span>'
                 : '<span class="status status-lost" style="font-size:10px">📉 LOW STOCK</span>';
+              const qty = 1;
               return `
               <tr data-idx="${i}">
                 <td><input type="checkbox" class="basket-chk" ${isRequested ? '' : 'checked'}></td>
@@ -898,8 +900,9 @@ async function loadPOBasket() {
                 <td>${typeBadge}</td>
                 <td class="${it.current_stock === 0 ? 'stock-zero' : 'stock-low'}">${it.current_stock === 0 ? '⛔ OUT' : it.current_stock}</td>
                 <td>${it.unit_cost ? fmtMYR(it.unit_cost) : '<span class="muted">TBD</span>'}</td>
-                <td><input type="number" class="editable basket-qty" min="1" placeholder="Qty" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
-                <td class="basket-subtotal"><span class="muted">—</span></td>
+                <td><input type="number" class="editable basket-qty" min="1" value="${qty}" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
+                <td class="basket-subtotal"><strong>${fmtMYR((it.unit_cost || 0) * qty)}</strong></td>
+                <td><button class="btn btn-red btn-sm" onclick="removeBasketItem(${i})" title="Remove from basket">✕</button></td>
               </tr>
             `}).join('')}
           </tbody>
@@ -913,6 +916,25 @@ async function loadPOBasket() {
 
 function togglePOSelectAll(checked) {
   document.querySelectorAll('.basket-chk').forEach(c => c.checked = checked);
+}
+
+async function removeBasketItem(i) {
+  const it = basketItems[i];
+  if (!it) return;
+  const isRequested = (it.description || '').startsWith('[REQUESTED]');
+  const msg = isRequested
+    ? `Delete customer-requested part "${it.part_number}" from basket? (This removes the demand record.)`
+    : `Dismiss "${it.part_number}" from basket? (It will come back once stock changes.)`;
+  if (!confirm(msg)) return;
+  try {
+    await api(`/purchase-orders/basket/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify({ part_number: it.part_number })
+    });
+    toast(`✓ Removed ${it.part_number}`);
+    loadPOBasket();
+    refreshPOBadge();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function updateBasketSubtotal(i) {

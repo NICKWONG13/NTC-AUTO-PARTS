@@ -28,6 +28,8 @@ router.get('/basket', async (req, res) => {
   try {
     const threshold = parseInt(await getSetting('po_reorder_threshold', '2'), 10);
     const defaultQty = parseInt(await getSetting('po_reorder_qty', '10'), 10);
+    const dismissedRaw = await getSetting('po_dismissed', '');
+    const dismissed = new Set((dismissedRaw || '').split(',').map(s => s.trim()).filter(Boolean));
 
     const { data, error } = await supabase
       .from('price_lookup')
@@ -45,7 +47,7 @@ router.get('/basket', async (req, res) => {
     const blocked = new Set((openItems || []).map(r => r.part_number));
 
     const items = (data || [])
-      .filter(r => !blocked.has(r.part_number))
+      .filter(r => !blocked.has(r.part_number) && !dismissed.has(r.part_number))
       .map(r => ({
         part_number: r.part_number,
         description: r.description,
@@ -56,6 +58,50 @@ router.get('/basket', async (req, res) => {
       }));
 
     res.json({ threshold, default_reorder_qty: defaultQty, items });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── POST /api/purchase-orders/basket/dismiss — remove an item from basket ─
+router.post('/basket/dismiss', async (req, res) => {
+  try {
+    const { part_number } = req.body || {};
+    if (!part_number) return res.status(400).json({ error: 'part_number required' });
+
+    // If it's a customer-requested placeholder (manual source, [REQUESTED] prefix),
+    // delete it. Otherwise add to dismissed list.
+    const { data: manual } = await supabase
+      .from('products')
+      .select('part_number, description, source')
+      .eq('part_number', part_number)
+      .eq('source', 'manual')
+      .maybeSingle();
+
+    if (manual && (manual.description || '').startsWith('[REQUESTED]')) {
+      await supabase.from('products').delete()
+        .eq('part_number', part_number).eq('source', 'manual');
+      return res.json({ ok: true, action: 'deleted_request' });
+    }
+
+    // Append to dismissed list in settings
+    const dismissedRaw = await getSetting('po_dismissed', '');
+    const list = new Set((dismissedRaw || '').split(',').map(s => s.trim()).filter(Boolean));
+    list.add(part_number);
+    await supabase.from('settings').upsert({
+      key: 'po_dismissed',
+      value: [...list].join(','),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'key' });
+    res.json({ ok: true, action: 'dismissed' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── POST /api/purchase-orders/basket/restore — clear dismissed list ─────
+router.post('/basket/restore', async (req, res) => {
+  try {
+    await supabase.from('settings').upsert({
+      key: 'po_dismissed', value: '', updated_at: new Date().toISOString()
+    }, { onConflict: 'key' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
