@@ -898,8 +898,8 @@ async function loadPOBasket() {
                 <td>${typeBadge}</td>
                 <td class="${it.current_stock === 0 ? 'stock-zero' : 'stock-low'}">${it.current_stock === 0 ? '⛔ OUT' : it.current_stock}</td>
                 <td>${it.unit_cost ? fmtMYR(it.unit_cost) : '<span class="muted">TBD</span>'}</td>
-                <td><input type="number" class="editable basket-qty" min="1" value="${it.suggested_qty}" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
-                <td class="basket-subtotal"><strong>${fmtMYR((it.unit_cost || 0) * it.suggested_qty)}</strong></td>
+                <td><input type="number" class="editable basket-qty" min="1" placeholder="Qty" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
+                <td class="basket-subtotal"><span class="muted">—</span></td>
               </tr>
             `}).join('')}
           </tbody>
@@ -919,17 +919,20 @@ function updateBasketSubtotal(i) {
   const row = document.querySelector(`#po-basket-list tr[data-idx="${i}"]`);
   const qty = parseInt(row.querySelector('.basket-qty').value, 10) || 0;
   const cost = basketItems[i].unit_cost || 0;
-  row.querySelector('.basket-subtotal').innerHTML = `<strong>${fmtMYR(cost * qty)}</strong>`;
+  const cell = row.querySelector('.basket-subtotal');
+  cell.innerHTML = qty > 0 ? `<strong>${fmtMYR(cost * qty)}</strong>` : '<span class="muted">—</span>';
 }
 
 async function createPOFromBasket() {
   const rows = document.querySelectorAll('#po-basket-list tr[data-idx]');
   const items = [];
+  let skippedNoQty = 0;
   rows.forEach(row => {
     const i = parseInt(row.dataset.idx, 10);
     const checked = row.querySelector('.basket-chk').checked;
     if (!checked) return;
-    const qty = parseInt(row.querySelector('.basket-qty').value, 10) || 1;
+    const qty = parseInt(row.querySelector('.basket-qty').value, 10);
+    if (!qty || qty < 1) { skippedNoQty++; return; }
     const it = basketItems[i];
     items.push({
       part_number: it.part_number,
@@ -940,7 +943,13 @@ async function createPOFromBasket() {
     });
   });
 
-  if (!items.length) { toast('Select at least one item.', 'error'); return; }
+  if (!items.length) {
+    toast(skippedNoQty > 0 ? `Enter order qty for selected items (${skippedNoQty} skipped).` : 'Select at least one item.', 'error');
+    return;
+  }
+  if (skippedNoQty > 0) {
+    if (!confirm(`${skippedNoQty} selected item(s) have no qty and will be skipped. Continue?`)) return;
+  }
 
   const supplier = prompt('Supplier name (optional):') || null;
 
