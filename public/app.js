@@ -877,23 +877,31 @@ async function loadPOBasket() {
             <th style="width:30px"><input type="checkbox" id="basket-select-all" checked onchange="togglePOSelectAll(this.checked)"></th>
             <th>Part No.</th>
             <th>Description</th>
+            <th>Type</th>
             <th>Current Stock</th>
             <th>Unit Cost</th>
             <th>Order Qty</th>
             <th>Subtotal</th>
           </tr></thead>
           <tbody>
-            ${items.map((it, i) => `
+            ${items.map((it, i) => {
+              const isRequested = (it.description || '').startsWith('[REQUESTED]');
+              const cleanDesc = isRequested ? it.description.replace('[REQUESTED]', '').trim() : it.description;
+              const typeBadge = isRequested
+                ? '<span class="status status-pending" style="font-size:10px">🔔 CUSTOMER REQUEST</span>'
+                : '<span class="status status-lost" style="font-size:10px">📉 LOW STOCK</span>';
+              return `
               <tr data-idx="${i}">
-                <td><input type="checkbox" class="basket-chk" checked></td>
+                <td><input type="checkbox" class="basket-chk" ${isRequested ? '' : 'checked'}></td>
                 <td><strong>${it.part_number}</strong></td>
-                <td>${it.description || '-'}</td>
+                <td>${cleanDesc || '-'}</td>
+                <td>${typeBadge}</td>
                 <td class="${it.current_stock === 0 ? 'stock-zero' : 'stock-low'}">${it.current_stock === 0 ? '⛔ OUT' : it.current_stock}</td>
-                <td>${fmtMYR(it.unit_cost)}</td>
+                <td>${it.unit_cost ? fmtMYR(it.unit_cost) : '<span class="muted">TBD</span>'}</td>
                 <td><input type="number" class="editable basket-qty" min="1" value="${it.suggested_qty}" style="width:70px" oninput="updateBasketSubtotal(${i})"></td>
                 <td class="basket-subtotal"><strong>${fmtMYR((it.unit_cost || 0) * it.suggested_qty)}</strong></td>
               </tr>
-            `).join('')}
+            `}).join('')}
           </tbody>
         </table>
       </div>

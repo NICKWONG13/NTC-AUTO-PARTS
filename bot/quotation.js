@@ -211,6 +211,9 @@ async function lookupPrices(parsedItems) {
     }
 
     if (matches.length === 0) {
+      // Auto-track customer demand — add to products (source='manual', stock 0)
+      // so it flows into the PO restock basket automatically
+      trackMissingPart(rawKey, item.raw_query, item.qty || 1).catch(() => {});
       return { ...item, matches: [], unit_price: null, price_source: 'tbd' };
     }
 
@@ -231,6 +234,44 @@ async function lookupPrices(parsedItems) {
     // Multiple matches — keep original query text, don't set unit_price (customer must choose)
     return { ...item, matches, unit_price: null, price_source: 'multi' };
   });
+}
+
+// ─── Track missing parts (customer demand) ───────────────────────────────
+// When a customer asks for something we don't stock, upsert a placeholder
+// into products (source='manual', stock_qty=0). The restock basket picks
+// this up automatically because stock < threshold.
+async function trackMissingPart(partKey, rawQuery, qty) {
+  if (!partKey || partKey.length < 2) return;
+
+  // Skip single letters (A/B/C letter-selections), pure commands, etc.
+  if (/^[A-Z]$/.test(partKey)) return;
+
+  // Does this part already exist in ANY source? If yes, don't override real data.
+  const { data: existing } = await supabase
+    .from('products')
+    .select('part_number, source, stock_qty')
+    .eq('part_number', partKey)
+    .limit(1);
+  if (existing && existing.length > 0) return; // real product exists
+
+  // Check if we already tracked this as a manual demand row
+  const { data: demand } = await supabase
+    .from('products')
+    .select('part_number, description, stock_qty')
+    .eq('part_number', partKey)
+    .eq('source', 'manual')
+    .maybeSingle?.() || { data: null };
+
+  const description = `[REQUESTED] ${rawQuery || partKey}`;
+
+  await supabase.from('products').upsert({
+    part_number: partKey,
+    source: 'manual',
+    description,
+    unit_price: 0,
+    stock_qty: 0,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'part_number,source' });
 }
 
 module.exports = { generateQuoteNumber, buildQuotationText, lookupPrices };
