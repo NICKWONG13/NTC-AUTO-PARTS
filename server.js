@@ -6,11 +6,23 @@ const cron = require('node-cron');
 const { setupHandler, sendFollowUpReminder, processUpdate } = require('./bot/handler');
 const supabase = require('./db/supabase');
 
+const { router: authRouter, requireAuth } = require('./api/auth');
+
 const app = express();
 app.use(express.json());
+
+// Auth endpoints are public (used by the login page itself)
+app.use('/api/auth', authRouter);
+
+// Serve the login page at /login
+app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+
+// Everything below requires authentication (except webhook, handled in requireAuth)
+app.use(requireAuth);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API routes
+// Protected API routes
 app.use('/api/products', require('./api/products'));
 app.use('/api/quotations', require('./api/quotations'));
 app.use('/api/customers', require('./api/customers'));

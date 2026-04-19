@@ -3,9 +3,24 @@ let currentTab = 'overview';
 let productsCache = [];
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Fetch current user — redirects to login if session expired
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.status === 401) { location.href = '/login'; return; }
+    const data = await res.json();
+    if (data.user) {
+      const badge = document.getElementById('user-badge');
+      if (badge) badge.textContent = `👤 ${data.user}`;
+    }
+  } catch (_) {}
   showTab('overview');
 });
+
+async function logout() {
+  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+  location.href = '/login';
+}
 
 // ─── Tab navigation ──────────────────────────────────────────────────────────
 function showTab(name) {
