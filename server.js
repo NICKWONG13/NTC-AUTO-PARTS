@@ -26,10 +26,11 @@ app.post('/api/remind', async (req, res) => {
 
 // ─── Telegram bot ─────────────────────────────────────────────────────────────
 let bot;
-const isProduction = process.env.NODE_ENV === 'production';
+// Serverless (Vercel) must use webhook. Local/dev uses polling.
+const isServerless = !!process.env.VERCEL || process.env.NODE_ENV === 'production';
 
 if (process.env.TELEGRAM_TOKEN) {
-  if (isProduction) {
+  if (isServerless) {
     bot = new TelegramBot(process.env.TELEGRAM_TOKEN);
     app.post(`/webhook/${process.env.TELEGRAM_TOKEN}`, (req, res) => {
       bot.processUpdate(req.body);
@@ -45,16 +46,7 @@ if (process.env.TELEGRAM_TOKEN) {
   console.warn('⚠️  TELEGRAM_TOKEN not set — bot disabled. Fill in .env to enable.');
 }
 
-// ─── Cron jobs ────────────────────────────────────────────────────────────────
-
-// Daily follow-up reminder at 9am Malaysia time (01:00 UTC)
-cron.schedule('0 1 * * *', () => {
-  if (bot && process.env.SALES_CHAT_ID) {
-    sendFollowUpReminder(bot, process.env.SALES_CHAT_ID);
-  }
-});
-
-// Dynamic external sync — reads interval from DB settings at runtime
+// ─── Cron + listen — only on long-running server, NOT on Vercel serverless ───
 let externalSyncJob = null;
 
 async function scheduleExternalSync() {
@@ -72,7 +64,6 @@ async function scheduleExternalSync() {
   }
 
   if (hours && hours > 0) {
-    // Build a cron expression: every N hours
     const cronExpr = `0 */${hours} * * *`;
     externalSyncJob = cron.schedule(cronExpr, async () => {
       console.log(`[auto-sync] Syncing external prices (every ${hours}h)…`);
@@ -88,20 +79,27 @@ async function scheduleExternalSync() {
   }
 }
 
-// Re-read sync interval whenever settings change via API
-// (called from api/settings.js after a successful PUT that includes ext_sync_interval)
 app.post('/api/settings/reschedule', async (req, res) => {
+  if (process.env.VERCEL) return res.json({ ok: true, note: 'Use Vercel Cron for scheduling' });
   await scheduleExternalSync();
   res.json({ ok: true });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  console.log(`\n🚀 Server running at http://localhost:${PORT}`);
-  console.log(`📊 Dashboard: http://localhost:${PORT}\n`);
 
-  // Schedule external sync based on saved DB setting
-  try { await scheduleExternalSync(); } catch (_) {}
-});
+// Only listen + schedule crons when NOT on Vercel (Vercel uses the exported app)
+if (!process.env.VERCEL) {
+  cron.schedule('0 1 * * *', () => {
+    if (bot && process.env.SALES_CHAT_ID) {
+      sendFollowUpReminder(bot, process.env.SALES_CHAT_ID);
+    }
+  });
+
+  app.listen(PORT, async () => {
+    console.log(`\n🚀 Server running at http://localhost:${PORT}`);
+    console.log(`📊 Dashboard: http://localhost:${PORT}\n`);
+    try { await scheduleExternalSync(); } catch (_) {}
+  });
+}
 
 module.exports = app;
