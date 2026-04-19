@@ -33,10 +33,10 @@ if (process.env.TELEGRAM_TOKEN) {
   if (isServerless) {
     bot = new TelegramBot(process.env.TELEGRAM_TOKEN);
     // Simple fixed path — token is verified via secret_token header instead
-    // Secret_token must be alphanumeric (Telegram requirement) — strip the colon
     const WEBHOOK_SECRET = process.env.TELEGRAM_TOKEN.replace(/:/g, '');
     app.post('/tg/webhook', (req, res) => {
       const secret = req.get('x-telegram-bot-api-secret-token');
+      console.log('[webhook] secret received:', secret ? secret.slice(0,10)+'...' : 'NONE', '| expected:', WEBHOOK_SECRET.slice(0,10)+'...', '| match:', secret === WEBHOOK_SECRET);
       if (secret !== WEBHOOK_SECRET) return res.sendStatus(401);
       bot.processUpdate(req.body);
       res.sendStatus(200);
