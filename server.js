@@ -32,7 +32,9 @@ const isServerless = !!process.env.VERCEL || process.env.NODE_ENV === 'productio
 if (process.env.TELEGRAM_TOKEN) {
   if (isServerless) {
     bot = new TelegramBot(process.env.TELEGRAM_TOKEN);
-    app.post(`/webhook/${process.env.TELEGRAM_TOKEN}`, (req, res) => {
+    // Token split avoids Express treating the ":" as a route parameter
+    const [botId, botSecret] = process.env.TELEGRAM_TOKEN.split(':');
+    app.post(`/webhook/${botId}/${botSecret}`, (req, res) => {
       bot.processUpdate(req.body);
       res.sendStatus(200);
     });
