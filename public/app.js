@@ -1,0 +1,813 @@
+// ─── State ───────────────────────────────────────────────────────────────────
+let currentTab = 'overview';
+let productsCache = [];
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  showTab('overview');
+});
+
+// ─── Tab navigation ──────────────────────────────────────────────────────────
+function showTab(name) {
+  currentTab = name;
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  document.querySelectorAll('.tab').forEach(el => {
+    if (el.getAttribute('onclick')?.includes(`'${name}'`)) el.classList.add('active');
+  });
+
+  if (name === 'overview') loadOverview();
+  else if (name === 'followups') loadFollowups();
+  else if (name === 'quotations') loadQuotations();
+  else if (name === 'customers') loadCustomers();
+  else if (name === 'products') loadProducts();
+  else if (name === 'settings') loadSettings();
+}
+
+function refreshAll() {
+  if (currentTab === 'overview') loadOverview();
+  else if (currentTab === 'followups') loadFollowups();
+  else if (currentTab === 'quotations') loadQuotations();
+  else if (currentTab === 'customers') loadCustomers();
+  else if (currentTab === 'products') loadProducts();
+  document.getElementById('last-refresh').textContent = 'Refreshed ' + new Date().toLocaleTimeString();
+}
+
+// ─── API helpers ─────────────────────────────────────────────────────────────
+async function api(path, opts = {}) {
+  const res = await fetch(`/api${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'API error');
+  return data;
+}
+
+// ─── Toast ───────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type === 'error' ? 'alert-error' : ''}`;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 3000);
+}
+
+// ─── Format helpers ──────────────────────────────────────────────────────────
+function fmtMYR(v) {
+  if (v == null) return 'TBD';
+  return 'RM ' + parseFloat(v).toFixed(2);
+}
+function fmtDate(s) {
+  return new Date(s).toLocaleDateString('en-GB');
+}
+function daysAgo(s) {
+  return Math.floor((Date.now() - new Date(s).getTime()) / 86400000);
+}
+function daysUntil(s) {
+  return Math.floor((new Date(s).getTime() - Date.now()) / 86400000);
+}
+
+// ─── Overview ────────────────────────────────────────────────────────────────
+async function loadOverview() {
+  try {
+    const [summary, followups, priceChanges, lowStock] = await Promise.all([
+      api('/dashboard/summary'),
+      api('/quotations/followups'),
+      api('/dashboard/price-changes'),
+      api('/dashboard/low-stock')
+    ]);
+
+    document.getElementById('stat-today').textContent = summary.total.today;
+    document.getElementById('stat-week').textContent = summary.total.week;
+    document.getElementById('stat-month').textContent = summary.total.month;
+    document.getElementById('stat-revenue').textContent = fmtMYR(summary.won.revenue);
+
+    // Status bars
+    const total = summary.total.all || 1;
+    document.getElementById('status-bars').innerHTML = [
+      { label: 'Won', count: summary.won.count, color: '#22c55e' },
+      { label: 'Pending', count: summary.pending.count, color: '#f59e0b' },
+      { label: 'Lost', count: summary.lost.count, color: '#ef4444' }
+    ].map(({ label, count, color }) => `
+      <div class="status-bar-row">
+        <span class="status-bar-label">${label}</span>
+        <div class="status-bar-track">
+          <div class="status-bar-fill" style="width:${Math.round(count/total*100)}%;background:${color}"></div>
+        </div>
+        <span class="status-bar-count">${count}</span>
+      </div>
+    `).join('');
+
+    // Source chart
+    const maxSrc = Math.max(...(summary.sources || []).map(s => s.count), 1);
+    document.getElementById('source-chart').innerHTML = (summary.sources || []).length
+      ? summary.sources.map(s => `
+          <div class="source-row">
+            <span class="source-label">${s.source}</span>
+            <div class="source-bar-track">
+              <div class="source-bar-fill" style="width:${Math.round(s.count/maxSrc*100)}%"></div>
+            </div>
+            <span class="source-count">${s.count}</span>
+          </div>`).join('')
+      : '<span class="muted">No data yet</span>';
+
+    // Badge
+    const badge = document.getElementById('badge-followups');
+    if (followups.length > 0) {
+      badge.textContent = followups.length;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+
+    // Overdue count + mini list
+    document.getElementById('overdue-count').textContent = followups.length;
+    document.getElementById('overview-followups').innerHTML = followups.length === 0
+      ? '<p class="empty">✅ No overdue follow-ups</p>'
+      : renderFollowupCards(followups.slice(0, 5));
+
+    // Price changes panel
+    renderPriceChanges(priceChanges);
+
+    // Low stock panel
+    renderLowStock(lowStock);
+
+    document.getElementById('last-refresh').textContent = 'Refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    toast('Failed to load overview: ' + e.message, 'error');
+  }
+}
+
+function renderPriceChanges(changes) {
+  const el = document.getElementById('price-changes-list');
+  if (!el) return;
+  if (!changes || changes.length === 0) {
+    el.innerHTML = '<p class="empty">No price changes in the last 30 days</p>';
+    return;
+  }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Part No.</th><th>Source</th><th>Old Price</th><th>New Price</th><th>Stock Δ</th><th>When</th></tr></thead>
+    <tbody>
+      ${changes.map(c => {
+        const priceDir = c.new_price > c.old_price ? 'price-up' : c.new_price < c.old_price ? 'price-down' : 'price-same';
+        const priceArrow = c.new_price > c.old_price ? '▲' : c.new_price < c.old_price ? '▼' : '—';
+        const stockDiff = (c.new_stock ?? 0) - (c.old_stock ?? 0);
+        const stockStr = stockDiff > 0 ? `<span style="color:var(--green)">+${stockDiff}</span>`
+                       : stockDiff < 0 ? `<span style="color:var(--red)">${stockDiff}</span>`
+                       : '<span class="muted">—</span>';
+        return `<tr>
+          <td><strong>${c.part_number}</strong><br><small class="muted">${c.description || ''}</small></td>
+          <td><span class="src-badge src-badge-on" style="border-color:${SOURCE_COLOR[c.source]||'var(--muted)'};color:${SOURCE_COLOR[c.source]||'var(--muted)'}">${SOURCE_LABEL[c.source]||c.source}</span></td>
+          <td class="muted">${fmtMYR(c.old_price)}</td>
+          <td class="${priceDir}">${priceArrow} ${fmtMYR(c.new_price)}</td>
+          <td>${stockStr}</td>
+          <td style="font-size:11px">${fmtDatetime(c.changed_at)}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+function renderLowStock(data) {
+  const el = document.getElementById('low-stock-list');
+  const labelEl = document.getElementById('low-stock-threshold-label');
+  if (!el) return;
+  if (labelEl && data.threshold != null) labelEl.textContent = `(qty < ${data.threshold})`;
+
+  const items = data.items || [];
+  if (items.length === 0) {
+    el.innerHTML = '<p class="empty">✅ All stock levels OK</p>';
+    return;
+  }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Part No.</th><th>Description</th><th>Stock</th><th>Price</th><th>Source</th></tr></thead>
+    <tbody>
+      ${items.map(p => {
+        const cls = p.stock_qty === 0 ? 'stock-zero' : 'stock-low';
+        return `<tr>
+          <td><strong>${p.part_number}</strong></td>
+          <td>${p.description}</td>
+          <td class="${cls}">${p.stock_qty === 0 ? '⛔ OUT' : p.stock_qty}</td>
+          <td>${fmtMYR(p.unit_price)}</td>
+          <td><span class="src-badge src-badge-on" style="border-color:${SOURCE_COLOR[p.source]||'var(--muted)'};color:${SOURCE_COLOR[p.source]||'var(--muted)'}">${SOURCE_LABEL[p.source]||p.source}</span></td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+// ─── Follow-ups ──────────────────────────────────────────────────────────────
+async function loadFollowups() {
+  try {
+    const data = await api('/quotations/followups');
+    const el = document.getElementById('followup-list');
+    el.innerHTML = data.length === 0
+      ? '<p class="empty">✅ No overdue follow-ups right now</p>'
+      : renderFollowupCards(data);
+  } catch (e) {
+    toast('Failed to load follow-ups: ' + e.message, 'error');
+  }
+}
+
+function renderFollowupCards(items) {
+  return items.map(q => {
+    const overdueDays = Math.abs(daysUntil(q.follow_up_due));
+    const customerName = q.customers?.name || 'Unknown';
+    const tgLink = q.customers?.telegram_id
+      ? `<a href="https://t.me/${q.customers.username || q.customers.telegram_id}" target="_blank" class="btn btn-outline btn-sm">💬 Telegram</a>`
+      : '';
+    return `
+      <div class="followup-card">
+        <div class="followup-info">
+          <div class="followup-quote">${q.quote_number} — ${customerName}</div>
+          <div class="followup-meta">
+            Created: ${fmtDate(q.created_at)} &nbsp;|&nbsp;
+            Amount: ${q.has_tbd ? 'TBD' : fmtMYR(q.total_amount)} &nbsp;|&nbsp;
+            <span class="followup-overdue">⏰ ${overdueDays}d overdue</span>
+          </div>
+        </div>
+        <div class="followup-actions">
+          ${tgLink}
+          <button class="btn btn-green btn-sm" onclick="updateStatus('${q.id}','won')">✓ Won</button>
+          <button class="btn btn-red btn-sm" onclick="updateStatus('${q.id}','lost')">✗ Lost</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function updateStatus(id, status) {
+  try {
+    await api(`/quotations/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    toast(`Marked as ${status}!`);
+    loadFollowups();
+    if (currentTab === 'overview') loadOverview();
+    if (currentTab === 'quotations') loadQuotations();
+  } catch (e) {
+    toast('Update failed: ' + e.message, 'error');
+  }
+}
+
+// ─── Quotations ───────────────────────────────────────────────────────────────
+async function loadQuotations() {
+  try {
+    const status = document.getElementById('filter-status').value;
+    const params = status ? `?status=${status}` : '';
+    const data = await api(`/quotations${params}`);
+
+    const html = data.length === 0
+      ? '<p class="empty">No quotations found</p>'
+      : `<div class="table-wrap"><table>
+          <thead><tr>
+            <th>Quote #</th><th>Customer</th><th>Items</th><th>Total</th>
+            <th>Status</th><th>Date</th><th>Actions</th>
+          </tr></thead>
+          <tbody>
+          ${data.map(q => {
+            const customer = q.customers?.name || 'Unknown';
+            const itemCount = q.quotation_items?.length || 0;
+            return `<tr>
+              <td><a href="#" onclick="showQuoteDetail('${q.id}');return false;" style="color:var(--accent)">${q.quote_number}</a></td>
+              <td>${customer}</td>
+              <td>${itemCount} item${itemCount !== 1 ? 's' : ''}</td>
+              <td>${q.has_tbd ? '<span style="color:var(--yellow)">TBD</span>' : fmtMYR(q.total_amount)}</td>
+              <td><span class="status status-${q.status}">${q.status}</span></td>
+              <td>${fmtDate(q.created_at)}</td>
+              <td>
+                ${q.status === 'pending' ? `
+                  <button class="btn btn-green btn-sm" onclick="updateStatus('${q.id}','won')">Won</button>
+                  <button class="btn btn-red btn-sm" onclick="updateStatus('${q.id}','lost')">Lost</button>
+                ` : `<span class="muted">—</span>`}
+              </td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table></div>`;
+
+    document.getElementById('quotations-list').innerHTML = html;
+  } catch (e) {
+    toast('Failed to load quotations: ' + e.message, 'error');
+  }
+}
+
+async function showQuoteDetail(id) {
+  try {
+    const q = await api(`/quotations/${id}`);
+
+    const items = q.quotation_items || [];
+    // Build Telegram-style quotation text for copying
+    const dateStr = new Date(q.created_at).toLocaleDateString('en-GB');
+    let copyLines = [`QUOTATION #${q.quote_number}`, `Date: ${dateStr}`, '', 'Items:'];
+    items.forEach((item, i) => {
+      const unit = item.unit_price != null ? `RM ${parseFloat(item.unit_price).toFixed(2)}` : 'TBD';
+      const sub  = item.subtotal   != null ? `RM ${parseFloat(item.subtotal).toFixed(2)}`   : 'TBD';
+      copyLines.push(`${i+1}. ${item.part_number||'-'} | ${item.description} | Qty: ${item.qty} | ${unit} ea | ${sub}`);
+    });
+    copyLines.push('', q.has_tbd ? 'TOTAL: TBD' : `TOTAL: RM ${parseFloat(q.total_amount).toFixed(2)}`);
+    copyLines.push('', 'Valid for 7 days.', 'For enquiries, please reply to this message.');
+    const copyText = copyLines.join('\n');
+
+    document.getElementById('modal-content').innerHTML = `
+      <div class="quote-detail">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <h3>${q.quote_number}</h3>
+          <button class="btn btn-outline btn-sm" onclick="copyQuoteText(this)" data-text="${escHtml(copyText)}">📋 Copy Text</button>
+        </div>
+        <p class="muted" style="margin-bottom:12px">
+          Customer: <strong>${q.customers?.name || 'Unknown'}</strong>
+          &nbsp;|&nbsp; ${fmtDate(q.created_at)}
+          &nbsp;|&nbsp; <span class="status status-${q.status}">${q.status}</span>
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Part No.</th><th>Description</th><th>Qty</th><th>Unit Price</th><th>Source</th><th>Subtotal</th></tr></thead>
+            <tbody>
+              ${items.map((item, i) => {
+                const src = item.price_source || 'tbd';
+                const srcColor = SOURCE_COLOR[src] || 'var(--muted)';
+                const srcLabel = SOURCE_LABEL[src] || src.toUpperCase();
+                return `<tr>
+                  <td>${i+1}</td>
+                  <td>${item.part_number || '—'}</td>
+                  <td>${item.description}</td>
+                  <td>${item.qty}</td>
+                  <td>${fmtMYR(item.unit_price)}</td>
+                  <td><span class="src-badge src-badge-on" style="border-color:${srcColor};color:${srcColor}">${srcLabel}</span></td>
+                  <td>${fmtMYR(item.subtotal)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="quote-total" style="margin-top:12px">Total: ${q.has_tbd ? '<span style="color:var(--yellow)">TBD</span>' : fmtMYR(q.total_amount)}</p>
+        ${q.notes ? `<p class="muted" style="margin-top:6px;font-size:12px">Notes: ${q.notes}</p>` : ''}
+      </div>
+    `;
+    document.getElementById('modal').classList.remove('hidden');
+  } catch (e) {
+    toast('Failed to load detail: ' + e.message, 'error');
+  }
+}
+
+function closeModal(e) {
+  if (e.target.id === 'modal') document.getElementById('modal').classList.add('hidden');
+}
+
+function copyQuoteText(btn) {
+  const text = btn.getAttribute('data-text');
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✓ Copied!';
+    setTimeout(() => { btn.textContent = '📋 Copy Text'; btn.innerHTML = '📋 Copy Text'; }, 2000);
+  }).catch(() => toast('Copy failed — please copy manually', 'error'));
+}
+
+// ─── Customers ────────────────────────────────────────────────────────────────
+async function loadCustomers() {
+  try {
+    const [customers, sources] = await Promise.all([
+      api('/customers'),
+      api('/customers/sources')
+    ]);
+
+    document.getElementById('source-table').innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Source</th><th>Customers</th></tr></thead>
+        <tbody>
+          ${sources.map(s => `<tr><td>${s.source}</td><td><strong>${s.count}</strong></td></tr>`).join('')}
+        </tbody>
+      </table></div>
+    `;
+
+    document.getElementById('customers-list').innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Username</th><th>Source</th><th>Joined</th></tr></thead>
+        <tbody>
+          ${customers.slice(0, 30).map(c => `<tr>
+            <td>${c.name || '—'}</td>
+            <td>${c.username ? '@' + c.username : '—'}</td>
+            <td>
+              <select onchange="updateSource('${c.id}', this.value)" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:2px 6px;font-size:12px">
+                ${['Telegram','WhatsApp','Walk-in','Referral','Online','Other'].map(src =>
+                  `<option value="${src}" ${c.source === src ? 'selected' : ''}>${src}</option>`
+                ).join('')}
+              </select>
+            </td>
+            <td>${fmtDate(c.created_at)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    `;
+  } catch (e) {
+    toast('Failed to load customers: ' + e.message, 'error');
+  }
+}
+
+async function updateSource(id, source) {
+  try {
+    await api(`/customers/${id}/source`, { method: 'PATCH', body: JSON.stringify({ source }) });
+    toast('Source updated');
+  } catch (e) {
+    toast('Update failed: ' + e.message, 'error');
+  }
+}
+
+// ─── Products ────────────────────────────────────────────────────────────────
+// Priority order: excel (1) → external (2) → manual (3)
+const SOURCE_PRIORITY = { excel: 1, external: 2, manual: 3 };
+const SOURCE_LABEL = { excel: 'Excel', external: 'External', manual: 'Manual' };
+const SOURCE_COLOR = { excel: '#22c55e', external: '#4f7cff', manual: '#f59e0b' };
+
+async function loadProducts() {
+  try {
+    // Load status cards and product table in parallel
+    const [all, lookup, settings] = await Promise.all([
+      api('/products'),
+      api('/products/lookup'),
+      api('/settings')
+    ]);
+
+    // Refresh Excel status card
+    refreshExcelStatus(settings.excel_last_filename ? {
+      filename: settings.excel_last_filename,
+      time: settings.excel_last_import,
+      imported: settings.excel_last_count
+    } : null);
+
+    // Refresh External status card
+    refreshExternalStatus((settings.ext_api_url || settings.ext_api_last_sync) ? {
+      url: settings.ext_api_url,
+      time: settings.ext_api_last_sync,
+      count: settings.ext_api_last_count
+    } : null);
+    productsCache = all;
+
+    // Build effective price map (active source per part)
+    const activeMap = {};
+    lookup.forEach(p => { activeMap[p.part_number] = p.source; });
+
+    // Group rows by part_number
+    const grouped = {};
+    all.forEach(p => {
+      if (!grouped[p.part_number]) grouped[p.part_number] = [];
+      grouped[p.part_number].push(p);
+    });
+
+    renderProductsTable(grouped, activeMap);
+  } catch (e) {
+    toast('Failed to load products: ' + e.message, 'error');
+  }
+}
+
+function renderProductsTable(grouped, activeMap) {
+  const parts = Object.keys(grouped).sort();
+  if (parts.length === 0) {
+    document.getElementById('products-list').innerHTML =
+      '<p class="empty">No products yet. Import the Excel stock file or add manually.</p>';
+    return;
+  }
+
+  const rows = parts.map(partNumber => {
+    const records = grouped[partNumber];
+    const activeSource = activeMap[partNumber];
+    const activeRecord = records.find(r => r.source === activeSource) || records[0];
+
+    const sourceBadges = ['excel', 'external', 'manual'].map(src => {
+      const rec = records.find(r => r.source === src);
+      if (!rec) return `<span class="src-badge src-badge-off">${SOURCE_LABEL[src]}</span>`;
+      const isActive = src === activeSource;
+      return `<span class="src-badge src-badge-on" style="border-color:${SOURCE_COLOR[src]};color:${SOURCE_COLOR[src]}" title="${SOURCE_LABEL[src]}: RM ${parseFloat(rec.unit_price).toFixed(2)} | Stock: ${rec.stock_qty}">${isActive ? '★ ' : ''}${SOURCE_LABEL[src]}</span>`;
+    }).join('');
+
+    // Manual record for editing (always show manual price input)
+    const manualRec = records.find(r => r.source === 'manual');
+
+    return `<tr>
+      <td><strong>${partNumber}</strong><br><small class="muted">${sourceBadges}</small></td>
+      <td>${escHtml(activeRecord.description)}</td>
+      <td style="color:${SOURCE_COLOR[activeSource] || 'var(--text)'}"><strong>${fmtMYR(activeRecord.unit_price)}</strong><br><small class="muted">via ${SOURCE_LABEL[activeSource] || '—'}</small></td>
+      <td>${activeRecord.stock_qty}</td>
+      <td>${fmtDate(activeRecord.updated_at)}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="editManual('${partNumber}','${escHtml(manualRec?.description || activeRecord.description)}',${manualRec?.unit_price ?? activeRecord.unit_price},${manualRec?.stock_qty ?? activeRecord.stock_qty})">✏ Manual</button>
+        ${manualRec ? `<button class="btn btn-red btn-sm" onclick="deleteProduct('${partNumber}','manual')">✕</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('products-list').innerHTML = `
+    <div class="legend-row">
+      <span class="src-badge src-badge-on" style="border-color:#22c55e;color:#22c55e">★ Excel</span> highest priority &nbsp;→&nbsp;
+      <span class="src-badge src-badge-on" style="border-color:#4f7cff;color:#4f7cff">External</span> &nbsp;→&nbsp;
+      <span class="src-badge src-badge-on" style="border-color:#f59e0b;color:#f59e0b">Manual</span> fallback
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Part Number / Sources</th><th>Description</th>
+        <th>Active Price</th><th>Stock</th><th>Updated</th><th>Actions</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+// Live filter product table rows by search term
+function filterProducts(term) {
+  const q = term.toLowerCase().trim();
+  const rows = document.querySelectorAll('#products-list tbody tr');
+  let visible = 0;
+  rows.forEach(row => {
+    const text = row.textContent.toLowerCase();
+    const show = !q || text.includes(q);
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  const countEl = document.getElementById('product-count');
+  if (countEl) countEl.textContent = q ? `${visible} result${visible !== 1 ? 's' : ''}` : '';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Edit/override the manual price for a part
+function editManual(partNumber, description, unitPrice, stockQty) {
+  document.getElementById('add-product-form').classList.remove('hidden');
+  document.getElementById('new-part').value = partNumber;
+  document.getElementById('new-part').readOnly = true;
+  document.getElementById('new-desc').value = description;
+  document.getElementById('new-price').value = unitPrice;
+  document.getElementById('new-stock').value = stockQty;
+  document.getElementById('new-part').focus();
+}
+
+async function saveProduct(partNumber, source, field, value) {
+  try {
+    const product = productsCache.find(p => p.part_number === partNumber && p.source === source);
+    if (!product) return;
+    const update = { source, description: product.description, unit_price: product.unit_price, stock_qty: product.stock_qty };
+    update[field] = field === 'description' ? value : parseFloat(value) || 0;
+    if (field === 'stock_qty') update[field] = parseInt(value, 10) || 0;
+
+    const updated = await api(`/products/${encodeURIComponent(partNumber)}`, {
+      method: 'PUT',
+      body: JSON.stringify(update)
+    });
+    Object.assign(product, updated);
+    toast('Saved');
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function deleteProduct(partNumber, source = 'manual') {
+  if (!confirm(`Delete ${partNumber} (${SOURCE_LABEL[source]} entry)?`)) return;
+  try {
+    await api(`/products/${encodeURIComponent(partNumber)}?source=${source}`, { method: 'DELETE' });
+    productsCache = productsCache.filter(p => !(p.part_number === partNumber && p.source === source));
+    toast('Deleted');
+    loadProducts();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+function showAddProduct() {
+  document.getElementById('add-product-form').classList.remove('hidden');
+  document.getElementById('new-part').readOnly = false;
+  document.getElementById('new-part').focus();
+}
+function hideAddProduct() {
+  document.getElementById('add-product-form').classList.add('hidden');
+  document.getElementById('new-part').readOnly = false;
+  ['new-part','new-desc','new-price','new-stock'].forEach(id => document.getElementById(id).value = '');
+}
+
+async function addProduct() {
+  const part_number = document.getElementById('new-part').value.trim();
+  const description = document.getElementById('new-desc').value.trim();
+  const unit_price = parseFloat(document.getElementById('new-price').value) || 0;
+  const stock_qty = parseInt(document.getElementById('new-stock').value, 10) || 0;
+
+  if (!part_number || !description) { toast('Part number and description required', 'error'); return; }
+  try {
+    await api('/products', { method: 'POST', body: JSON.stringify({ part_number, description, unit_price, stock_qty }) });
+    hideAddProduct();
+    toast('Manual price saved');
+    loadProducts();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// ─── Excel Import ─────────────────────────────────────────────────────────────
+// context: 'products' (Products tab) or 'settings' (Settings tab)
+async function importExcel(input, context = 'products') {
+  if (!input.files[0]) return;
+  const formData = new FormData();
+  formData.append('file', input.files[0]);
+
+  const resultId = context === 'settings' ? 'settings-import-result' : 'import-result';
+  const resultEl = document.getElementById(resultId);
+  resultEl.className = 'alert';
+  resultEl.textContent = '⏳ Importing… please wait';
+  resultEl.classList.remove('hidden');
+
+  try {
+    const res = await fetch('/api/products/import', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    resultEl.className = 'alert alert-success';
+    resultEl.innerHTML = `✓ <strong>${data.imported} products</strong> imported from <em>${data.filename}</em><br>
+      <small>Columns detected — Part: <b>${data.columns_detected.part_number}</b> |
+      Price: <b>${data.columns_detected.unit_price}</b> |
+      Stock: <b>${data.columns_detected.stock_qty}</b></small>`;
+
+    refreshExcelStatus(data);
+    if (currentTab === 'products') loadProducts();
+  } catch (e) {
+    resultEl.className = 'alert alert-error';
+    resultEl.textContent = '✗ Import failed: ' + e.message;
+  }
+  input.value = '';
+}
+
+// ─── External Sync ────────────────────────────────────────────────────────────
+async function syncExternal() {
+  const extStatusEl = document.getElementById('external-status');
+  if (extStatusEl) extStatusEl.innerHTML = '<span class="muted">⏳ Syncing…</span>';
+
+  try {
+    const data = await api('/products/sync', { method: 'POST' });
+    toast(`✓ Synced ${data.synced} products from external system`);
+    refreshExternalStatus({ synced: data.synced, time: new Date().toISOString() });
+    if (currentTab === 'products') loadProducts();
+  } catch (e) {
+    toast('Sync failed: ' + e.message, 'error');
+    if (extStatusEl) extStatusEl.innerHTML = `<span style="color:var(--red)">✗ ${e.message}</span>`;
+  }
+}
+
+// ─── Status helpers ───────────────────────────────────────────────────────────
+function fmtDatetime(s) {
+  if (!s) return '—';
+  return new Date(s).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+
+function refreshExcelStatus(data) {
+  const html = data
+    ? `<div class="stat-row"><span class="stat-label">File</span><span class="stat-val">${data.filename || '—'}</span></div>
+       <div class="stat-row"><span class="stat-label">Last Import</span><span class="stat-val">${fmtDatetime(data.time || new Date().toISOString())}</span></div>
+       <div class="stat-row"><span class="stat-label">Records</span><span class="stat-val">${data.imported ?? data.count ?? '—'}</span></div>`
+    : '<span class="muted">No Excel file uploaded yet</span>';
+
+  ['excel-status', 'settings-excel-status'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+  });
+}
+
+function refreshExternalStatus(data) {
+  const el = document.getElementById('external-status');
+  if (!el) return;
+  if (!data || (!data.url && !data.synced && !data.time)) {
+    el.innerHTML = '<span class="muted">Not configured. Set API URL in ⚙️ Settings.</span>';
+    return;
+  }
+  el.innerHTML = `
+    <div class="stat-row"><span class="stat-label">API URL</span><span class="stat-val" style="font-size:11px;word-break:break-all">${data.url || '(configured)'}</span></div>
+    <div class="stat-row"><span class="stat-label">Last Sync</span><span class="stat-val">${fmtDatetime(data.time)}</span></div>
+    <div class="stat-row"><span class="stat-label">Records</span><span class="stat-val">${data.count ?? data.synced ?? '—'}</span></div>`;
+}
+
+// ─── Settings Tab ─────────────────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    const s = await api('/settings');
+
+    // Populate external API fields
+    document.getElementById('cfg-api-url').value = s.ext_api_url || '';
+    document.getElementById('cfg-api-key').value = s.ext_api_key || '';
+
+    // Low stock threshold
+    const lowStockEl = document.getElementById('cfg-low-stock');
+    if (lowStockEl) lowStockEl.value = s.low_stock_threshold || '5';
+
+    // Auto-sync interval
+    const intervalEl = document.getElementById('cfg-sync-interval');
+    if (intervalEl) intervalEl.value = s.ext_sync_interval || '';
+
+    // Last sync status
+    const syncStatusEl = document.getElementById('sync-status');
+    if (syncStatusEl && s.ext_api_last_sync) {
+      syncStatusEl.textContent = `Last synced: ${fmtDatetime(s.ext_api_last_sync)}  |  ${s.ext_api_last_count || 0} records`;
+    }
+
+    // Excel status in Settings panel
+    const excelData = s.excel_last_filename ? {
+      filename: s.excel_last_filename,
+      time: s.excel_last_import,
+      count: s.excel_last_count
+    } : null;
+    refreshExcelStatus(excelData);
+
+    // External status in Products tab
+    const extData = (s.ext_api_url || s.ext_api_last_sync) ? {
+      url: s.ext_api_url,
+      time: s.ext_api_last_sync,
+      count: s.ext_api_last_count
+    } : null;
+    refreshExternalStatus(extData);
+
+  } catch (e) {
+    toast('Failed to load settings: ' + e.message, 'error');
+  }
+}
+
+async function saveLowStockThreshold() {
+  const val = document.getElementById('cfg-low-stock').value.trim();
+  if (!val || isNaN(val)) { toast('Please enter a valid number', 'error'); return; }
+  try {
+    await api('/settings', { method: 'PUT', body: JSON.stringify({ low_stock_threshold: val }) });
+    toast(`✓ Low stock threshold set to ${val}`);
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function saveExtSettings() {
+  const url = document.getElementById('cfg-api-url').value.trim();
+  const key = document.getElementById('cfg-api-key').value.trim();
+  try {
+    await api('/settings', { method: 'PUT', body: JSON.stringify({ ext_api_url: url, ext_api_key: key }) });
+    toast('✓ Settings saved');
+    // Refresh external status display in Products tab
+    refreshExternalStatus({ url, time: null, count: null });
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function saveSyncInterval() {
+  const interval = document.getElementById('cfg-sync-interval').value;
+  try {
+    await api('/settings', { method: 'PUT', body: JSON.stringify({ ext_sync_interval: interval }) });
+    // Tell server to re-read interval and reschedule cron
+    await fetch('/api/settings/reschedule', { method: 'POST' });
+    toast(interval ? `✓ Auto-sync set to every ${interval}h` : '✓ Auto-sync disabled');
+    const syncStatusEl = document.getElementById('sync-status');
+    if (syncStatusEl) syncStatusEl.textContent = interval ? `Auto-sync: every ${interval}h` : 'Auto-sync: disabled';
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function testExternal() {
+  const url = document.getElementById('cfg-api-url').value.trim();
+  const key = document.getElementById('cfg-api-key').value.trim();
+  const resultEl = document.getElementById('ext-test-result');
+
+  if (!url) {
+    resultEl.className = 'alert alert-error';
+    resultEl.textContent = '✗ Please enter an API URL first';
+    resultEl.classList.remove('hidden');
+    return;
+  }
+
+  resultEl.className = 'alert';
+  resultEl.textContent = '⏳ Testing connection…';
+  resultEl.classList.remove('hidden');
+
+  try {
+    // Test only — does NOT save settings or import data
+    const data = await api('/settings/test-external', {
+      method: 'POST',
+      body: JSON.stringify({ url, key })
+    });
+    resultEl.className = 'alert alert-success';
+    resultEl.innerHTML = `✓ Connected! Found <strong>${data.count}</strong> products.<br>
+      <small>Sample: ${data.sample.map(p => p.part_number || p.partNumber || JSON.stringify(p)).join(', ')}</small><br>
+      <small>Press <strong>💾 Save</strong> to save settings, then go to Products tab → <strong>🔄 Sync Now</strong>.</small>`;
+  } catch (e) {
+    resultEl.className = 'alert alert-error';
+    resultEl.textContent = '✗ Connection failed: ' + e.message;
+  }
+}
+
+function togglePassword(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (input.type === 'password') { input.type = 'text'; btn.textContent = '🙈'; }
+  else { input.type = 'password'; btn.textContent = '👁'; }
+}
+
+// ─── Telegram Reminder ───────────────────────────────────────────────────────
+async function sendReminder() {
+  try {
+    const res = await fetch('/api/remind', { method: 'POST' });
+    if (!res.ok) throw new Error('Server error');
+    toast('✓ Reminder sent to Telegram');
+  } catch (e) {
+    toast('Failed to send reminder: ' + e.message, 'error');
+  }
+}

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NTC Auto Parts — Sales Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">🔧</span>
+        <div>
+          <h1>NTC AUTO PARTS</h1>
+          <p>Sales Dashboard</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="last-refresh" class="muted">—</span>
+        <button class="btn btn-outline" onclick="refreshAll()">↻ Refresh</button>
+        <button class="btn btn-warning" onclick="sendReminder()">🔔 Send Reminder</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" onclick="showTab('overview')">📊 Overview</button>
+    <button class="tab" onclick="showTab('followups')">⏰ Follow-ups <span id="badge-followups" class="badge hidden"></span></button>
+    <button class="tab" onclick="showTab('quotations')">📋 Quotations</button>
+    <button class="tab" onclick="showTab('customers')">👥 Customers</button>
+    <button class="tab" onclick="showTab('products')">💰 Products</button>
+    <button class="tab" onclick="showTab('settings')">⚙️ Settings</button>
+  </nav>
+
+  <main>
+    <!-- OVERVIEW TAB -->
+    <section id="tab-overview" class="tab-content active">
+      <div class="cards-row">
+        <div class="card">
+          <div class="card-label">Quotes Today</div>
+          <div class="card-value" id="stat-today">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">This Week</div>
+          <div class="card-value" id="stat-week">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">This Month</div>
+          <div class="card-value" id="stat-month">—</div>
+        </div>
+        <div class="card card-green">
+          <div class="card-label">Won Revenue</div>
+          <div class="card-value" id="stat-revenue">—</div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <h2>Quote Status</h2>
+          <div class="status-bars" id="status-bars"></div>
+        </div>
+        <div class="panel">
+          <h2>Customer Sources</h2>
+          <div id="source-chart"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>⏰ Overdue Follow-ups <span id="overdue-count" class="badge"></span></h2>
+        <div id="overview-followups"></div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <h2>📈 Recent Price Changes <span class="muted" style="font-size:11px;font-weight:400">(last 30 days)</span></h2>
+          <div id="price-changes-list"></div>
+        </div>
+        <div class="panel">
+          <h2>⚠️ Low Stock Alert <span id="low-stock-threshold-label" class="muted" style="font-size:11px;font-weight:400"></span></h2>
+          <div id="low-stock-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOLLOW-UPS TAB -->
+    <section id="tab-followups" class="tab-content">
+      <div class="panel">
+        <div class="panel-header">
+          <h2>Pending Follow-ups</h2>
+          <button class="btn btn-warning btn-sm" onclick="sendReminder()">🔔 Telegram Reminder</button>
+        </div>
+        <div id="followup-list"></div>
+      </div>
+    </section>
+
+    <!-- QUOTATIONS TAB -->
+    <section id="tab-quotations" class="tab-content">
+      <div class="panel">
+        <div class="panel-header">
+          <h2>All Quotations</h2>
+          <div class="filter-row">
+            <select id="filter-status" onchange="loadQuotations()">
+              <option value="">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="won">Won</option>
+              <option value="lost">Lost</option>
+            </select>
+          </div>
+        </div>
+        <div id="quotations-list"></div>
+      </div>
+    </section>
+
+    <!-- CUSTOMERS TAB -->
+    <section id="tab-customers" class="tab-content">
+      <div class="two-col">
+        <div class="panel">
+          <h2>Customer Sources</h2>
+          <div id="source-table"></div>
+        </div>
+        <div class="panel">
+          <h2>Recent Customers</h2>
+          <div id="customers-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRODUCTS TAB -->
+    <section id="tab-products" class="tab-content">
+
+      <!-- Excel Upload Card -->
+      <div class="two-col">
+        <div class="panel source-panel">
+          <div class="source-panel-header">
+            <div class="source-panel-title">
+              <span class="source-dot" style="background:#22c55e"></span>
+              <strong>① Excel Stock File</strong>
+              <span class="priority-tag">最高优先</span>
+            </div>
+            <label class="btn btn-primary btn-sm">
+              📤 Upload Excel
+              <input type="file" id="excel-upload" accept=".xlsx,.xls" hidden onchange="importExcel(this)" />
+            </label>
+          </div>
+          <div id="excel-status" class="source-status">
+            <span class="muted">Loading…</span>
+          </div>
+          <div id="import-result" class="alert hidden" style="margin-top:10px"></div>
+          <div class="source-hint">
+            Supported columns: Part No. / Description / Unit Price / Stock Qty<br>
+            Re-upload anytime to refresh prices — old Excel data is replaced.
+          </div>
+        </div>
+
+        <div class="panel source-panel">
+          <div class="source-panel-header">
+            <div class="source-panel-title">
+              <span class="source-dot" style="background:#4f7cff"></span>
+              <strong>② External System</strong>
+              <span class="priority-tag" style="background:rgba(79,124,255,0.15);color:#4f7cff">第二优先</span>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="syncExternal()">🔄 Sync Now</button>
+          </div>
+          <div id="external-status" class="source-status">
+            <span class="muted">Loading…</span>
+          </div>
+          <div class="source-hint">
+            Configure the API URL in <a href="#" onclick="showTab('settings');return false" style="color:var(--accent)">⚙️ Settings</a> tab.<br>
+            Sync manually anytime or set auto-sync interval in Settings.
+          </div>
+        </div>
+      </div>
+
+      <!-- Manual + full list -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>💰 All Products (Combined View)</h2>
+          <div class="product-actions">
+            <button class="btn btn-outline btn-sm" onclick="showAddProduct()">✏ Add Manual Price</button>
+          </div>
+        </div>
+        <div class="search-bar-row">
+          <input type="text" id="product-search" placeholder="🔍  Search part number or description…" oninput="filterProducts(this.value)" />
+          <span id="product-count" class="muted"></span>
+        </div>
+        <div id="add-product-form" class="add-form hidden">
+          <input type="text" id="new-part" placeholder="Part Number" />
+          <input type="text" id="new-desc" placeholder="Description" />
+          <input type="number" id="new-price" placeholder="Price (RM)" step="0.01" />
+          <input type="number" id="new-stock" placeholder="Stock Qty" />
+          <button class="btn btn-primary btn-sm" onclick="addProduct()">Save</button>
+          <button class="btn btn-ghost btn-sm" onclick="hideAddProduct()">Cancel</button>
+        </div>
+        <div id="products-list"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS TAB -->
+    <section id="tab-settings" class="tab-content">
+      <div class="two-col">
+
+        <!-- External System Config -->
+        <div class="panel">
+          <h2>🔗 External System Connection</h2>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label>API URL</label>
+              <input type="url" id="cfg-api-url" placeholder="https://your-system.com/api/products" />
+              <small>The endpoint must return a JSON array of products</small>
+            </div>
+            <div class="settings-field">
+              <label>API Key / Token</label>
+              <div class="input-eye">
+                <input type="password" id="cfg-api-key" placeholder="Bearer token or API key (optional)" />
+                <button class="eye-btn" onclick="togglePassword('cfg-api-key',this)">👁</button>
+              </div>
+              <small>Sent as <code>Authorization: Bearer &lt;key&gt;</code></small>
+            </div>
+            <div class="settings-actions">
+              <button class="btn btn-outline btn-sm" onclick="testExternal()">🔌 Test Connection</button>
+              <button class="btn btn-primary btn-sm" onclick="saveExtSettings()">💾 Save</button>
+            </div>
+            <div id="ext-test-result" class="alert hidden" style="margin-top:10px"></div>
+          </div>
+
+          <div class="settings-divider"></div>
+          <h2>⚠️ Low Stock Alert Threshold</h2>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label>Alert when stock below</label>
+              <input type="number" id="cfg-low-stock" placeholder="5" min="0" style="max-width:120px" />
+              <small>Parts with stock qty below this number appear in the Overview warning panel</small>
+            </div>
+            <div class="settings-actions">
+              <button class="btn btn-primary btn-sm" onclick="saveLowStockThreshold()">💾 Save</button>
+            </div>
+          </div>
+
+          <div class="settings-divider"></div>
+          <h2>🔄 Auto-Sync Schedule</h2>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label>Auto-sync interval</label>
+              <select id="cfg-sync-interval">
+                <option value="">Disabled (manual only)</option>
+                <option value="1">Every 1 hour</option>
+                <option value="6">Every 6 hours</option>
+                <option value="12">Every 12 hours</option>
+                <option value="24">Every 24 hours</option>
+              </select>
+            </div>
+            <div class="settings-actions">
+              <button class="btn btn-primary btn-sm" onclick="saveSyncInterval()">💾 Save Interval</button>
+            </div>
+            <div id="sync-status" class="muted" style="margin-top:8px;font-size:12px"></div>
+          </div>
+        </div>
+
+        <!-- Excel Info -->
+        <div class="panel">
+          <h2>📊 Excel Stock File Status</h2>
+          <div id="settings-excel-status" class="source-status" style="margin-bottom:16px">
+            <span class="muted">Loading…</span>
+          </div>
+          <label class="btn btn-primary btn-sm" style="display:inline-flex">
+            📤 Upload New Excel File
+            <input type="file" accept=".xlsx,.xls" hidden onchange="importExcel(this,'settings')" />
+          </label>
+          <div id="settings-import-result" class="alert hidden" style="margin-top:10px"></div>
+
+          <div class="settings-divider"></div>
+          <h2>ℹ️ Expected Excel Format</h2>
+          <div class="excel-format-table">
+            <table>
+              <thead><tr><th>Part No.</th><th>Description</th><th>Unit Price</th><th>Stock</th></tr></thead>
+              <tbody>
+                <tr><td>ABC123</td><td>Brake Pad Front</td><td>45.00</td><td>50</td></tr>
+                <tr><td>XYZ456</td><td>Oil Filter</td><td>25.00</td><td>120</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="source-hint" style="margin-top:8px">
+            Column names are detected automatically — exact names don't matter as long as they contain keywords like "part", "desc", "price", "stock".
+          </p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Quotation Detail Modal -->
+  <div id="modal" class="modal-overlay hidden" onclick="closeModal(event)">
+    <div class="modal">
+      <button class="modal-close" onclick="document.getElementById('modal').classList.add('hidden')">✕</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
