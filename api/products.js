@@ -267,6 +267,53 @@ router.post('/import', upload.single('file'), async (req, res) => {
   }
 });
 
+// POST batched import (client parsed Excel → JSON chunks)
+// Avoids Vercel's 4.5 MB body limit for large spreadsheets
+router.post('/import-batch', async (req, res) => {
+  try {
+    const { filename, products: incoming, first, finalize, total } = req.body || {};
+    if (!Array.isArray(incoming) || incoming.length === 0) {
+      return res.status(400).json({ error: 'No products in batch' });
+    }
+
+    const products = incoming
+      .map(p => ({
+        part_number: String(p.part_number || '').trim().toUpperCase(),
+        source: 'excel',
+        description: String(p.description || '').trim() || '-',
+        unit_price: parseFloat(p.unit_price) || 0,
+        stock_qty:  parseInt(p.stock_qty, 10) || 0,
+        updated_at: new Date().toISOString()
+      }))
+      .filter(p => p.part_number && p.part_number.length > 1 && isNaN(p.part_number));
+
+    await logPriceChanges(products, 'excel');
+
+    let imported = 0;
+    for (let i = 0; i < products.length; i += 500) {
+      const chunk = products.slice(i, i + 500);
+      const { data, error } = await supabase
+        .from('products')
+        .upsert(chunk, { onConflict: 'part_number,source' })
+        .select();
+      if (error) return res.status(500).json({ error: error.message });
+      imported += data.length;
+    }
+
+    if (finalize) {
+      await supabase.from('settings').upsert([
+        { key: 'excel_last_filename', value: filename || '(uploaded)', updated_at: new Date().toISOString() },
+        { key: 'excel_last_import',   value: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { key: 'excel_last_count',    value: String(total || imported), updated_at: new Date().toISOString() }
+      ], { onConflict: 'key' });
+    }
+
+    res.json({ imported, finalize: !!finalize });
+  } catch (e) {
+    res.status(500).json({ error: 'Batch import failed: ' + e.message });
+  }
+});
+
 // POST sync from external system → source = 'external'
 router.post('/sync', async (req, res) => {
   // Read from DB settings first, fall back to .env

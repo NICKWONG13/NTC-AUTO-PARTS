@@ -9,7 +9,7 @@ const supabase = require('./db/supabase');
 const { router: authRouter, requireAuth } = require('./api/auth');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 
 // Auth endpoints are public (used by the login page itself)
 app.use('/api/auth', authRouter);

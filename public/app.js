@@ -629,31 +629,133 @@ async function addProduct() {
   }
 }
 
-// ─── Excel Import ─────────────────────────────────────────────────────────────
-// context: 'products' (Products tab) or 'settings' (Settings tab)
+// ─── Excel Import (CLIENT-SIDE parse → chunked JSON upload) ─────────────────
+// Browser parses the Excel file with SheetJS, extracts products, then POSTs
+// compact JSON in batches of 1000 rows. Avoids Vercel's 4.5 MB body limit.
 async function importExcel(input, context = 'products') {
-  if (!input.files[0]) return;
-  const formData = new FormData();
-  formData.append('file', input.files[0]);
+  const file = input.files[0];
+  if (!file) return;
 
   const resultId = context === 'settings' ? 'settings-import-result' : 'import-result';
   const resultEl = document.getElementById(resultId);
   resultEl.className = 'alert';
-  resultEl.textContent = '⏳ Importing… please wait';
+  resultEl.textContent = '⏳ Reading Excel file…';
   resultEl.classList.remove('hidden');
 
   try {
-    const res = await fetch('/api/products/import', { method: 'POST', body: formData });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    if (typeof XLSX === 'undefined') throw new Error('Excel parser not loaded. Please refresh the page.');
+
+    // Read as ArrayBuffer
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'array' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const raw = XLSX.utils.sheet_to_json(sheet, { defval: '', header: 1 });
+    if (!raw || raw.length < 2) throw new Error('Excel file is empty or too short');
+
+    // ── Header + column detection (mirrors server logic) ───────────────────
+    const norm = s => String(s).toLowerCase().replace(/[\s_\-\.()#\/]/g, '');
+    const PRICE_KW = ['price','harga','rate','cost','amt','sellingprice','unitprice','avgcost'];
+    const STOCK_KW = ['stock','qty','quantity','onhand','baki','balance','qoh','bal'];
+    const PART_KW  = ['part','itemcode','itemno','code','item'];
+    const DESC_KW  = ['description','itemdesc','desc','keterangan','barang'];
+
+    let headerRowIdx = 0;
+    for (let i = 0; i < Math.min(raw.length, 30); i++) {
+      const named = raw[i].filter(c => c && isNaN(c) && String(c).trim().length > 1);
+      if (named.length >= 3) { headerRowIdx = i; break; }
+    }
+    const headerRow = raw[headerRowIdx];
+    const dataRows  = raw.slice(headerRowIdx + 1);
+
+    const samples = dataRows.slice(0, 40).filter(r => r.some(c => c !== ''));
+    const looksLikePart = (ci) => {
+      const vals = samples.map(r => String(r[ci] ?? '').trim()).filter(Boolean);
+      if (!vals.length) return false;
+      if (vals.every((v, i) => Number(v) === i + 1)) return false;
+      const numCount = vals.filter(v => !isNaN(Number(v))).length;
+      if (numCount / vals.length > 0.8) return false;
+      return true;
+    };
+
+    let iPrice = -1, iStock = -1, iPart = -1, iDesc = -1;
+    headerRow.forEach((h, i) => {
+      const n = norm(h);
+      if (!n) return;
+      if (iPrice < 0 && PRICE_KW.some(k => n.includes(k))) iPrice = i;
+      if (iStock < 0 && STOCK_KW.some(k => n.includes(k))) iStock = i;
+      if (iPart  < 0 && PART_KW.some(k => n.includes(k))  && looksLikePart(i)) iPart = i;
+      if (iDesc  < 0 && DESC_KW.some(k => n.includes(k))) iDesc = i;
+    });
+
+    if (iPart < 0 || iDesc < 0) {
+      // Fallback detection by data patterns
+      const colStats = headerRow.map((_, ci) => {
+        const vals = samples.map(r => String(r[ci] ?? '').trim()).filter(v => v.length > 0);
+        if (!vals.length) return { ci, avgLen: 0, isNum: true, isText: false };
+        const avgLen = vals.reduce((s, v) => s + v.length, 0) / vals.length;
+        const numCount = vals.filter(v => !isNaN(Number(v)) && v !== '').length;
+        const isSeq = vals.every((v, i) => Number(v) === i + 1);
+        const isNum  = numCount / vals.length > 0.8;
+        const isText = !isNum && !isSeq && avgLen > 1;
+        return { ci, avgLen, isNum, isText };
+      });
+      const textCols = colStats.filter(c => c.isText && c.ci !== iPrice && c.ci !== iStock);
+      if (iPart < 0 && textCols.length > 0) iPart = textCols.reduce((a, b) => a.ci < b.ci ? a : b).ci;
+      if (iDesc < 0) {
+        const cand = textCols.filter(c => c.ci !== iPart).sort((a, b) => b.avgLen - a.avgLen)[0];
+        if (cand) iDesc = cand.ci;
+      }
+    }
+
+    if (iPart < 0 || iDesc < 0) {
+      throw new Error(`Cannot detect Part Number or Description columns. Headers: ${headerRow.filter(h => h).join(', ') || '(none)'}`);
+    }
+
+    // ── Build compact product list ─────────────────────────────────────────
+    const products = dataRows
+      .map(row => ({
+        part_number: String(row[iPart] ?? '').trim().toUpperCase(),
+        description: String(row[iDesc] ?? '').trim() || '-',
+        unit_price: iPrice >= 0 ? (parseFloat(String(row[iPrice]).replace(/[^0-9.]/g, '')) || 0) : 0,
+        stock_qty:  iStock >= 0 ? (parseInt(String(row[iStock]).replace(/[^0-9]/g, ''), 10) || 0) : 0,
+      }))
+      .filter(p => p.part_number && p.part_number.length > 1 && isNaN(p.part_number));
+
+    if (!products.length) throw new Error('No valid product rows found after parsing');
+
+    // ── Chunked upload ─────────────────────────────────────────────────────
+    const CHUNK = 1000;
+    const totalChunks = Math.ceil(products.length / CHUNK);
+    let imported = 0;
+
+    for (let ci = 0; ci < totalChunks; ci++) {
+      const chunk = products.slice(ci * CHUNK, (ci + 1) * CHUNK);
+      resultEl.textContent = `⏳ Uploading ${ci + 1}/${totalChunks} (${imported}/${products.length} so far)…`;
+
+      const res = await fetch('/api/products/import-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          products: chunk,
+          first: ci === 0,
+          finalize: ci === totalChunks - 1,
+          total: products.length
+        })
+      });
+      const text = await res.text();
+      let data; try { data = JSON.parse(text); } catch { throw new Error('Server error: ' + text.slice(0, 140)); }
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      imported += data.imported || chunk.length;
+    }
 
     resultEl.className = 'alert alert-success';
-    resultEl.innerHTML = `✓ <strong>${data.imported} products</strong> imported from <em>${data.filename}</em><br>
-      <small>Columns detected — Part: <b>${data.columns_detected.part_number}</b> |
-      Price: <b>${data.columns_detected.unit_price}</b> |
-      Stock: <b>${data.columns_detected.stock_qty}</b></small>`;
+    resultEl.innerHTML = `✓ <strong>${imported} products</strong> imported from <em>${file.name}</em><br>
+      <small>Columns — Part: <b>col[${iPart}]</b> | Desc: <b>col[${iDesc}]</b> |
+      Price: <b>${iPrice >= 0 ? 'col[' + iPrice + ']' : '(default 0)'}</b> |
+      Stock: <b>${iStock >= 0 ? 'col[' + iStock + ']' : '(default 0)'}</b></small>`;
 
-    refreshExcelStatus(data);
+    refreshExcelStatus({ filename: file.name, imported, time: new Date().toISOString() });
     if (currentTab === 'products') loadProducts();
   } catch (e) {
     resultEl.className = 'alert alert-error';
