@@ -142,11 +142,20 @@ async function lookupPrices(parsedItems) {
     .select('part_number, description, unit_price, source');
 
   const compact = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const all = (lookup || []).map(r => ({
-    ...r,
-    rawKey:     r.part_number.toUpperCase().trim(),
-    compactKey: compact(r.part_number)
-  }));
+  // Skip [REQUESTED] placeholder rows — they exist only to flag customer demand
+  // in the PO basket and must never win a price lookup.
+  const isPlaceholder = r =>
+    r.source === 'manual' &&
+    (!r.unit_price || Number(r.unit_price) === 0) &&
+    String(r.description || '').startsWith('[REQUESTED]');
+
+  const all = (lookup || [])
+    .filter(r => !isPlaceholder(r))
+    .map(r => ({
+      ...r,
+      rawKey:     r.part_number.toUpperCase().trim(),
+      compactKey: compact(r.part_number)
+    }));
 
   const rawMap     = {}; all.forEach(r => { rawMap[r.rawKey]     = r; });
   const compactMap = {}; all.forEach(r => { compactMap[r.compactKey] = r; });
@@ -253,6 +262,19 @@ async function trackMissingPart(partKey, rawQuery, qty) {
     .eq('part_number', partKey)
     .limit(1);
   if (existing && existing.length > 0) return; // real product exists
+
+  // Also check: does any real (excel/external) product match as a compact-prefix?
+  // Example: user types "45022S9A" → real part "45022-S9A-A01N1" exists → don't track.
+  const compact = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const searchCompact = compact(partKey);
+  if (searchCompact.length >= 4) {
+    const { data: catalog } = await supabase
+      .from('products')
+      .select('part_number')
+      .in('source', ['excel', 'external']);
+    const hit = (catalog || []).some(r => compact(r.part_number).startsWith(searchCompact));
+    if (hit) return; // real catalog has a matching part — don't create a placeholder
+  }
 
   // Check if we already tracked this as a manual demand row
   const { data: demand } = await supabase
