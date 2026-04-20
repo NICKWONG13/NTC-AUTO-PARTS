@@ -714,12 +714,23 @@ async function processUpdate(bot, update) {
     }
 
     // ── Natural-language fallback ─────────────────────────────────
-    // If user typed a sentence-like query (many words, no pipes, no digits),
-    // guide them to /new instead of forcing a bad keyword match.
-    const wordCount = text.trim().split(/\s+/).length;
+    // If the user typed an English sentence (presence of common stop words),
+    // redirect them to /new rather than doing a lossy keyword search.
+    const STOP_WORDS = new Set([
+      'i','want','need','needs','looking','look','lookin','search','searching',
+      'find','finding','please','pls','plz','can','could','would','should',
+      'you','u','have','has','having','get','getting','a','an','the','this',
+      'that','these','those','me','my','mine','for','with','to','do','does',
+      'any','got','is','are','was','were','there','hi','hello','hey','help',
+      'ask','asking','show','give','know','tell','available','avail','stock',
+      'how','what','when','where','which','who','why'
+    ]);
+    const lowerWords = text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const stopHits = lowerWords.filter(w => STOP_WORDS.has(w)).length;
     const hasPipe = text.includes('|');
-    const hasDigit = /\d/.test(text);
-    const looksLikeSentence = wordCount >= 4 && !hasPipe && !hasDigit;
+    // Require 2+ stop words to avoid false positives on queries like
+    // "DISC ROTOR FOR CIVIC" (only "for" is a stop word).
+    const looksLikeSentence = !hasPipe && stopHits >= 2 && lowerWords.length >= 3;
     if (looksLikeSentence) {
       await bot.sendMessage(chatId,
         `👋 Looks like you're asking in a sentence.\n\n` +
