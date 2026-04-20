@@ -4,23 +4,24 @@ const { generateQuoteNumber, buildQuotationText, lookupPrices } = require('./quo
 // ─── Help text ────────────────────────────────────────────────────────────────
 const HELP_TEXT = `👋 Welcome to NTC Auto Parts!
 
-Send your enquiry in *any* of these formats:
+*📝 Guided quote (recommended):*
+Type /new and I'll walk you through step by step:
+  1️⃣ PART NUMBER
+  2️⃣ DESCRIPTION
+  3️⃣ QUANTITY
 
-*Full format (one line per item):*
+*Quick format (advanced):*
+Send one item per line:
 \`\`\`
 ABC123 | Brake Pad | 2
 XYZ456 | Oil Filter | 1
 \`\`\`
 
-*Part number only (we fill the description):*
-\`\`\`
-ABC123 | 2
-XYZ456
-\`\`\`
-
-*Multiple items at once — one item per line.*
-
-Type /myquotes to see your recent quotations.`;
+*Commands:*
+/new – start a guided quote
+/done – finish and generate quote
+/cancel – abort current quote
+/myquotes – view your recent quotations`;
 
 const SALES_HELP = `*Sales Commands:*
 /remind — Send overdue follow-up list
@@ -163,6 +164,30 @@ async function saveQuotation(customerId, chatId, quoteNumber, items, total, hasT
 
   await supabase.from('quotation_items').insert(rows);
   return quotation.id;
+}
+
+// ─── Session helpers (guided /new quote flow) ───────────────────────────
+async function getSession(telegramId) {
+  const { data } = await supabase.from('bot_sessions')
+    .select('*').eq('telegram_id', telegramId).limit(1);
+  return (data && data[0]) || null;
+}
+async function setSession(telegramId, state, data) {
+  await supabase.from('bot_sessions').upsert({
+    telegram_id: telegramId, state,
+    data: data || {},
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'telegram_id' });
+}
+async function clearSession(telegramId) {
+  await supabase.from('bot_sessions').delete().eq('telegram_id', telegramId);
+}
+
+function renderCart(items) {
+  if (!items.length) return '_(empty)_';
+  return items.map((it, i) =>
+    `${i + 1}. \`${it.part_number}\`${it.description ? ' — ' + it.description : ''}  × ${it.qty}`
+  ).join('\n');
 }
 
 // Load customer's latest pending-selection quotation
@@ -431,6 +456,113 @@ async function processUpdate(bot, update) {
   const isSales = String(msg.chat.id) === String(salesChatId);
 
   try {
+    // ── Guided-quote commands (/new, /done, /cancel) ───────────────
+    const session = await getSession(msg.from.id);
+
+    if (text === '/new' || text === '/quote') {
+      await setSession(msg.from.id, 'awaiting_part', { items: [] });
+      await bot.sendMessage(chatId,
+        `📝 *NEW QUOTE — ITEM 1*\n\n` +
+        `Please reply with the *PART NUMBER*:\n\n` +
+        `_Example: 45022-S9A-A01N1_\n\n` +
+        `• Type /cancel anytime to stop`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    if (text === '/cancel') {
+      if (session) {
+        await clearSession(msg.from.id);
+        await bot.sendMessage(chatId, '❌ Quote cancelled.');
+      } else {
+        await bot.sendMessage(chatId, '_No active quote to cancel. Type /new to start._', { parse_mode: 'Markdown' });
+      }
+      return;
+    }
+
+    if (text === '/done') {
+      if (!session || !session.data?.items?.length) {
+        await bot.sendMessage(chatId, '_No items added yet. Type /new to start a quote._', { parse_mode: 'Markdown' });
+        return;
+      }
+      const cartItems = session.data.items.map(it => ({
+        part_number: it.part_number,
+        raw_query: it.raw_query || it.part_number,
+        description: it.description || null,
+        qty: it.qty || 1,
+        needsLookup: !it.description
+      }));
+      await clearSession(msg.from.id);
+
+      const enriched = await enrichDescriptions(cartItems);
+      const pricedItems = await lookupPrices(enriched);
+      const quoteNumber = await generateQuoteNumber();
+      const { text: qText, total, hasTbd } = buildQuotationText(quoteNumber, pricedItems);
+      await bot.sendMessage(chatId, qText, { parse_mode: 'Markdown' });
+
+      const customerId = await getOrCreateCustomer(msg);
+      await saveQuotation(customerId, chatId, quoteNumber, pricedItems, total, hasTbd);
+      const customerName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Unknown';
+      await notifySales(bot, salesChatId, quoteNumber, customerName, qText);
+      return;
+    }
+
+    // ── Session-state routing (user is filling the form) ────────────
+    if (session && !text.startsWith('/')) {
+      const data = session.data || { items: [] };
+      const itemNum = (data.items?.length || 0) + 1;
+
+      if (session.state === 'awaiting_part') {
+        data.current = { part_number: text.toUpperCase(), raw_query: text };
+        await setSession(msg.from.id, 'awaiting_desc', data);
+        await bot.sendMessage(chatId,
+          `✓ Part #${itemNum}: \`${text}\`\n\n` +
+          `Now reply with the *DESCRIPTION*:\n\n` +
+          `_Example: Brake Pad Front_\n\n` +
+          `• Reply \`-\` to skip (we'll auto-fill from catalog)\n` +
+          `• Type /cancel to stop`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      if (session.state === 'awaiting_desc') {
+        data.current.description = (text.trim() === '-' || text.trim() === '') ? null : text.trim();
+        await setSession(msg.from.id, 'awaiting_qty', data);
+        await bot.sendMessage(chatId,
+          `✓ Description: ${data.current.description || '_(auto-fill from catalog)_'}\n\n` +
+          `Now reply with the *QTY*:\n\n` +
+          `_Example: 2_\n\n` +
+          `• Reply \`-\` or empty for qty 1\n` +
+          `• Type /cancel to stop`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      if (session.state === 'awaiting_qty') {
+        const qty = parseInt(text.replace(/[^0-9]/g, ''), 10) || 1;
+        data.current.qty = qty;
+        data.items = data.items || [];
+        data.items.push(data.current);
+        data.current = null;
+        await setSession(msg.from.id, 'awaiting_part', data);
+
+        await bot.sendMessage(chatId,
+          `✅ Item ${data.items.length} added!\n\n` +
+          `*🛒 Current cart (${data.items.length} item${data.items.length > 1 ? 's' : ''}):*\n` +
+          `${renderCart(data.items)}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `*ITEM ${data.items.length + 1}* — reply with *PART NUMBER* to add another\n\n` +
+          `• /done – generate quotation\n` +
+          `• /cancel – abort`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+    }
+
     // ── Commands ─────────────────────────────────────────────────
     if (text === '/start' || text === '/help') {
       const extra = (text === '/start' && isSales) ? `\n\n${SALES_HELP}` : '';
@@ -581,6 +713,27 @@ async function processUpdate(bot, update) {
       return;
     }
 
+    // ── Natural-language fallback ─────────────────────────────────
+    // If user typed a sentence-like query (many words, no pipes, no digits),
+    // guide them to /new instead of forcing a bad keyword match.
+    const wordCount = text.trim().split(/\s+/).length;
+    const hasPipe = text.includes('|');
+    const hasDigit = /\d/.test(text);
+    const looksLikeSentence = wordCount >= 4 && !hasPipe && !hasDigit;
+    if (looksLikeSentence) {
+      await bot.sendMessage(chatId,
+        `👋 Looks like you're asking in a sentence.\n\n` +
+        `For accurate pricing, please type /new and I'll guide you field by field:\n` +
+        `  1️⃣ PART NUMBER\n` +
+        `  2️⃣ DESCRIPTION\n` +
+        `  3️⃣ QTY\n\n` +
+        `Or send it directly like:\n` +
+        `\`ABC123 | Brake Pad | 2\``,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
     // ── Normal item query ─────────────────────────────────────────
     const rawItems = parseItems(text);
     if (rawItems.length === 0) {
@@ -592,6 +745,15 @@ async function processUpdate(bot, update) {
     const quoteNumber = await generateQuoteNumber();
     const { text: qText, total, hasTbd } = buildQuotationText(quoteNumber, pricedItems);
     await bot.sendMessage(chatId, qText, { parse_mode: 'Markdown' });
+
+    // If anything came back unmatched, suggest the guided form
+    if (hasTbd) {
+      await bot.sendMessage(chatId,
+        `💡 _Some items didn't match. Try /new to enter part number, description, and qty step by step._`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
     const customerId = await getOrCreateCustomer(msg);
     await saveQuotation(customerId, chatId, quoteNumber, pricedItems, total, hasTbd);
     const customerName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Unknown';
