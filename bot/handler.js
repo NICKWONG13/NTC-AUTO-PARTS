@@ -732,14 +732,14 @@ async function processUpdate(bot, update) {
     // "DISC ROTOR FOR CIVIC" (only "for" is a stop word).
     const looksLikeSentence = !hasPipe && stopHits >= 2 && lowerWords.length >= 3;
     if (looksLikeSentence) {
+      // Auto-start the guided form instead of making them type /new
+      await setSession(msg.from.id, 'awaiting_part', { items: [] });
       await bot.sendMessage(chatId,
-        `👋 Looks like you're asking in a sentence.\n\n` +
-        `For accurate pricing, please type /new and I'll guide you field by field:\n` +
-        `  1️⃣ PART NUMBER\n` +
-        `  2️⃣ DESCRIPTION\n` +
-        `  3️⃣ QTY\n\n` +
-        `Or send it directly like:\n` +
-        `\`ABC123 | Brake Pad | 2\``,
+        `👋 Let me guide you step by step.\n\n` +
+        `📝 *NEW QUOTE — ITEM 1*\n\n` +
+        `Please reply with the *PART NUMBER*:\n\n` +
+        `_Example: 45022-S9A-A01N1_\n\n` +
+        `• Type /cancel anytime to stop`,
         { parse_mode: 'Markdown' }
       );
       return;
