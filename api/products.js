@@ -133,30 +133,51 @@ router.post('/import', upload.single('file'), async (req, res) => {
     if (!raw || raw.length < 2) return res.status(400).json({ error: 'Excel file is empty or too short' });
 
     const norm = s => String(s).toLowerCase().replace(/[\s_\-\.()#\/]/g, '');
-    const PRICE_KW = ['price','harga','rate','cost','amt'];
-    const STOCK_KW = ['stock','qty','quantity','onhand','baki','balance'];
-    const PART_KW  = ['part','code','item','no','bil'];
-    const DESC_KW  = ['desc','name','keterangan','barang','item'];
+    const PRICE_KW = ['price','harga','rate','cost','amt','sellingprice','unitprice','avgcost'];
+    const STOCK_KW = ['stock','qty','quantity','onhand','baki','balance','qoh','bal'];
+    // Removed 'no' / 'bil' — too broad; matches row-counter "No." column. Compound terms still work.
+    const PART_KW  = ['part','itemcode','itemno','code','item'];
+    const DESC_KW  = ['description','itemdesc','desc','keterangan','barang'];
 
-    // Step 1: find header row (first row where at least 1 non-empty named header exists)
+    // Headers found multiple rows in; find first row with >= 3 named text cells (real header)
     let headerRowIdx = 0;
-    for (let i = 0; i < Math.min(raw.length, 20); i++) {
-      const namedCols = raw[i].filter(c => c && isNaN(c) && String(c).trim().length > 1);
-      if (namedCols.length >= 1) { headerRowIdx = i; break; }
+    for (let i = 0; i < Math.min(raw.length, 30); i++) {
+      const named = raw[i].filter(c => c && isNaN(c) && String(c).trim().length > 1);
+      if (named.length >= 3) { headerRowIdx = i; break; }
+    }
+    // Fallback: if no "rich" header found, use the first row with ANY named cell
+    if (headerRowIdx === 0 && raw[0].every(c => !c || String(c).trim().length <= 1)) {
+      for (let i = 0; i < Math.min(raw.length, 30); i++) {
+        const named = raw[i].filter(c => c && isNaN(c) && String(c).trim().length > 1);
+        if (named.length >= 1) { headerRowIdx = i; break; }
+      }
     }
 
     const headerRow = raw[headerRowIdx];
     const dataRows  = raw.slice(headerRowIdx + 1);
 
-    // Step 2: find columns by header name first, then by data analysis
+    // Data samples used to validate each detected column
+    const samples = dataRows.slice(0, 40).filter(r => r.some(c => c !== ''));
+    const looksLikePart = (ci) => {
+      const vals = samples.map(r => String(r[ci] ?? '').trim()).filter(Boolean);
+      if (!vals.length) return false;
+      // Reject sequential row counters (1, 2, 3...)
+      if (vals.every((v, i) => Number(v) === i + 1)) return false;
+      // Reject pure-numeric column (price / qty / row#)
+      const numCount = vals.filter(v => !isNaN(Number(v))).length;
+      if (numCount / vals.length > 0.8) return false;
+      return true;
+    };
+
     let iPrice = -1, iStock = -1, iPart = -1, iDesc = -1;
 
     headerRow.forEach((h, i) => {
       const n = norm(h);
+      if (!n) return;
       if (iPrice < 0 && PRICE_KW.some(k => n.includes(k))) iPrice = i;
       if (iStock < 0 && STOCK_KW.some(k => n.includes(k))) iStock = i;
-      if (iPart  < 0 && PART_KW.some(k => n.includes(k)))  iPart  = i;
-      if (iDesc  < 0 && DESC_KW.some(k => n.includes(k)))  iDesc  = i;
+      if (iPart  < 0 && PART_KW.some(k => n.includes(k))  && looksLikePart(i)) iPart = i;
+      if (iDesc  < 0 && DESC_KW.some(k => n.includes(k))) iDesc = i;
     });
 
     // Step 3: if part/desc still not found, detect by data patterns
