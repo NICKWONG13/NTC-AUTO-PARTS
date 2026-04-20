@@ -137,9 +137,21 @@ async function lookupPrices(parsedItems) {
     return parsedItems.map(item => ({ ...item, matches: [], unit_price: null, price_source: 'tbd' }));
   }
 
-  const { data: lookup } = await supabase
-    .from('price_lookup')
-    .select('part_number, description, unit_price, source');
+  // Supabase returns max 1000 rows per request by default. Paginate to fetch
+  // the full catalog (25k+ rows) — otherwise most parts never enter `all` and
+  // the bot returns TBD for anything beyond the first page.
+  const lookup = [];
+  const PAGE = 1000;
+  for (let start = 0; start < 200000; start += PAGE) {
+    const { data, error } = await supabase
+      .from('price_lookup')
+      .select('part_number, description, unit_price, source')
+      .range(start, start + PAGE - 1);
+    if (error) break;
+    if (!data || data.length === 0) break;
+    lookup.push(...data);
+    if (data.length < PAGE) break;
+  }
 
   const compact = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
   // Skip [REQUESTED] placeholder rows — they exist only to flag customer demand
@@ -268,11 +280,19 @@ async function trackMissingPart(partKey, rawQuery, qty) {
   const compact = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
   const searchCompact = compact(partKey);
   if (searchCompact.length >= 4) {
-    const { data: catalog } = await supabase
-      .from('products')
-      .select('part_number')
-      .in('source', ['excel', 'external']);
-    const hit = (catalog || []).some(r => compact(r.part_number).startsWith(searchCompact));
+    // Paginate through full catalog (Supabase returns max 1000 rows/query)
+    let hit = false;
+    const PAGE = 1000;
+    for (let start = 0; start < 200000 && !hit; start += PAGE) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('part_number')
+        .in('source', ['excel', 'external'])
+        .range(start, start + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      hit = data.some(r => compact(r.part_number).startsWith(searchCompact));
+      if (data.length < PAGE) break;
+    }
     if (hit) return; // real catalog has a matching part — don't create a placeholder
   }
 
