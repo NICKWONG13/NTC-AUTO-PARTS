@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
     .select(`
       id, quote_number, total_amount, status, has_tbd,
       created_at, follow_up_due,
-      customers(name, username, source),
+      customers(name, username, source, telegram_id),
       quotation_items(part_number, description, qty, unit_price, subtotal)
     `)
     .order('created_at', { ascending: false })

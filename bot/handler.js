@@ -254,9 +254,18 @@ async function getPendingSelection(telegramId) {
 // ─── Notify sales ────────────────────────────────────────────────────────────
 async function notifySales(bot, salesChatId, quoteNumber, customerName, text) {
   if (!salesChatId) return;
-  const notice = `🔔 *New Enquiry — ${quoteNumber}*\nFrom: ${customerName}\n\n${text}`;
+  const dashboardUrl = (process.env.DASHBOARD_URL || 'https://ntc-auto-parts.vercel.app').replace(/\/$/, '');
+  const notice =
+    `🔔 *New Enquiry — ${quoteNumber}*\n` +
+    `From: ${customerName}\n\n` +
+    `${text}\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📊 [Open in Dashboard](${dashboardUrl})`;
   try {
-    await bot.sendMessage(salesChatId, notice, { parse_mode: 'Markdown' });
+    await bot.sendMessage(salesChatId, notice, {
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true
+    });
   } catch (e) {
     console.error('Failed to notify sales:', e.message);
   }

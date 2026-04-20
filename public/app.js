@@ -240,12 +240,21 @@ async function loadFollowups() {
   }
 }
 
+// Returns a valid Telegram deep-link for the customer, or null if none
+function telegramLinkFor(customer) {
+  if (!customer) return null;
+  if (customer.username) return `https://t.me/${customer.username}`;
+  if (customer.telegram_id) return `tg://user?id=${customer.telegram_id}`;
+  return null;
+}
+
 function renderFollowupCards(items) {
   return items.map(q => {
     const overdueDays = Math.abs(daysUntil(q.follow_up_due));
     const customerName = q.customers?.name || 'Unknown';
-    const tgLink = q.customers?.telegram_id
-      ? `<a href="https://t.me/${q.customers.username || q.customers.telegram_id}" target="_blank" class="btn btn-outline btn-sm">💬 Telegram</a>`
+    const tgUrl = telegramLinkFor(q.customers);
+    const tgLink = tgUrl
+      ? `<a href="${tgUrl}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">💬 Telegram</a>`
       : '';
     return `
       <div class="followup-card">
@@ -297,6 +306,10 @@ async function loadQuotations() {
           ${data.map(q => {
             const customer = q.customers?.name || 'Unknown';
             const itemCount = q.quotation_items?.length || 0;
+            const tgUrl = telegramLinkFor(q.customers);
+            const tgBtn = tgUrl
+              ? `<a href="${tgUrl}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" title="Open in Telegram">💬 Telegram</a>`
+              : '';
             return `<tr>
               <td><a href="#" onclick="showQuoteDetail('${q.id}');return false;" style="color:var(--accent)">${q.quote_number}</a></td>
               <td>${customer}</td>
@@ -305,10 +318,11 @@ async function loadQuotations() {
               <td><span class="status status-${q.status}">${q.status}</span></td>
               <td>${fmtDate(q.created_at)}</td>
               <td>
+                ${tgBtn}
                 ${q.status === 'pending' ? `
                   <button class="btn btn-green btn-sm" onclick="updateStatus('${q.id}','won')">Won</button>
                   <button class="btn btn-red btn-sm" onclick="updateStatus('${q.id}','lost')">Lost</button>
-                ` : `<span class="muted">—</span>`}
+                ` : ''}
               </td>
             </tr>`;
           }).join('')}
