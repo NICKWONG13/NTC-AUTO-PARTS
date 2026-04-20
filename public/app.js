@@ -680,24 +680,19 @@ async function importExcel(input, context = 'products') {
       return true;
     };
 
-    let iPrice = -1, iStock = -1, iPart = -1, iDesc = -1;
-    // Pass 1: preferred selling-price + others
+    let iPrice = -1, iCost = -1, iStock = -1, iPart = -1, iDesc = -1;
+    // Pass 1: capture selling price (SP 1) AND cost (Avg Cost) separately
     headerRow.forEach((h, i) => {
       const n = norm(h);
       if (!n) return;
       if (iPrice < 0 && PRICE_PREF.some(k => n.includes(k))) iPrice = i;
-      if (iStock < 0 && STOCK_KW.some(k => n.includes(k))) iStock = i;
+      if (iCost  < 0 && PRICE_ALT.some(k => n.includes(k)))  iCost  = i;
+      if (iStock < 0 && STOCK_KW.some(k => n.includes(k)))   iStock = i;
       if (iPart  < 0 && PART_KW.some(k => n.includes(k))  && looksLikePart(i)) iPart = i;
-      if (iDesc  < 0 && DESC_KW.some(k => n.includes(k))) iDesc = i;
+      if (iDesc  < 0 && DESC_KW.some(k => n.includes(k)))    iDesc  = i;
     });
-    // Pass 2: fall back to cost columns only if no selling price found
-    if (iPrice < 0) {
-      headerRow.forEach((h, i) => {
-        const n = norm(h);
-        if (!n) return;
-        if (iPrice < 0 && PRICE_ALT.some(k => n.includes(k))) iPrice = i;
-      });
-    }
+    // If no selling-price column exists, use cost as the primary
+    if (iPrice < 0 && iCost >= 0) { iPrice = iCost; iCost = -1; }
 
     if (iPart < 0 || iDesc < 0) {
       // Fallback detection by data patterns
@@ -724,14 +719,35 @@ async function importExcel(input, context = 'products') {
     }
 
     // ── Build compact product list ─────────────────────────────────────────
+    const parseNum = (v) => parseFloat(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
+    const parseInt10 = (v) => parseInt(String(v ?? '').replace(/[^0-9]/g, ''), 10) || 0;
+
+    let skippedDead = 0;
+    let fallbackCount = 0;
     const products = dataRows
-      .map(row => ({
-        part_number: String(row[iPart] ?? '').trim().toUpperCase(),
-        description: String(row[iDesc] ?? '').trim() || '-',
-        unit_price: iPrice >= 0 ? (parseFloat(String(row[iPrice]).replace(/[^0-9.]/g, '')) || 0) : 0,
-        stock_qty:  iStock >= 0 ? (parseInt(String(row[iStock]).replace(/[^0-9]/g, ''), 10) || 0) : 0,
-      }))
-      .filter(p => p.part_number && p.part_number.length > 1 && isNaN(p.part_number));
+      .map(row => {
+        const sp   = iPrice >= 0 ? parseNum(row[iPrice]) : 0;
+        const cost = iCost  >= 0 ? parseNum(row[iCost])  : 0;
+        const stock = iStock >= 0 ? parseInt10(row[iStock]) : 0;
+        // Use SP 1 when available, else fall back to Avg Cost
+        let unit_price = sp > 0 ? sp : cost;
+        const usedFallback = sp === 0 && cost > 0;
+        if (usedFallback) fallbackCount++;
+        return {
+          part_number: String(row[iPart] ?? '').trim().toUpperCase(),
+          description: String(row[iDesc] ?? '').trim() || '-',
+          unit_price,
+          stock_qty: stock,
+          _dead: unit_price === 0 && stock === 0
+        };
+      })
+      .filter(p => {
+        if (!p.part_number || p.part_number.length <= 1 || !isNaN(p.part_number)) return false;
+        // Skip dead catalog entries (no price AND no stock)
+        if (p._dead) { skippedDead++; return false; }
+        delete p._dead;
+        return true;
+      });
 
     if (!products.length) throw new Error('No valid product rows found after parsing');
 
@@ -764,8 +780,11 @@ async function importExcel(input, context = 'products') {
     resultEl.className = 'alert alert-success';
     resultEl.innerHTML = `✓ <strong>${imported} products</strong> imported from <em>${file.name}</em><br>
       <small>Columns — Part: <b>col[${iPart}]</b> | Desc: <b>col[${iDesc}]</b> |
-      Price: <b>${iPrice >= 0 ? 'col[' + iPrice + ']' : '(default 0)'}</b> |
-      Stock: <b>${iStock >= 0 ? 'col[' + iStock + ']' : '(default 0)'}</b></small>`;
+      SP: <b>${iPrice >= 0 ? 'col[' + iPrice + ']' : '(none)'}</b> |
+      Cost fallback: <b>${iCost >= 0 ? 'col[' + iCost + ']' : '(none)'}</b> |
+      Stock: <b>${iStock >= 0 ? 'col[' + iStock + ']' : '(none)'}</b></small>
+      ${fallbackCount ? `<br><small style="color:#f59e0b">• ${fallbackCount} items used Avg Cost as fallback (SP 1 blank)</small>` : ''}
+      ${skippedDead ? `<br><small class="muted">• ${skippedDead} dead entries skipped (no price & no stock)</small>` : ''}`;
 
     refreshExcelStatus({ filename: file.name, imported, time: new Date().toISOString() });
     if (currentTab === 'products') loadProducts();
