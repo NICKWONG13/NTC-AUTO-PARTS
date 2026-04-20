@@ -14,6 +14,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (badge) badge.textContent = `👤 ${data.user}`;
     }
   } catch (_) {}
+
+  // Deep-link support: /#quote=QT-20260420-010 opens the Quotations tab
+  // and flashes the matching row. Used by Telegram sales notifications.
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const deepQuote = hash.get('quote');
+  if (deepQuote) {
+    showTab('quotations');
+    // Wait for loadQuotations to finish, then highlight the row
+    setTimeout(() => {
+      const rows = document.querySelectorAll('#quotations-list tr');
+      for (const r of rows) {
+        if (r.textContent.includes(deepQuote)) {
+          r.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          r.style.outline = '2px solid var(--accent)';
+          r.style.transition = 'outline-color 1.5s ease';
+          setTimeout(() => { r.style.outline = 'none'; }, 3500);
+          break;
+        }
+      }
+    }, 600);
+    return;
+  }
   showTab('overview');
 });
 
