@@ -46,9 +46,13 @@ function buildQuotationText(quoteNumber, items) {
   lines.push('');
 
   let total = 0;
-  let hasTbd = false;
+  let hasTbd = false;       // truly no match (part not in catalog)
+  let hasContact = false;   // matched but price not set → Contact to get quote
   let hasMultiple = false;
   let itemNum = 0;
+
+  // Price state: null = no match, 0 = matched but no price, >0 = priced
+  const priceState = (p) => p == null ? 'tbd' : (Number(p) === 0 ? 'contact' : 'priced');
 
   items.forEach((item, idx) => {
     if (item.matches && item.matches.length > 1) {
@@ -59,18 +63,32 @@ function buildQuotationText(quoteNumber, items) {
 
       item.matches.forEach((m, mi) => {
         itemNum++;
-        const subtotal = m.unit_price != null ? m.unit_price * item.qty : null;
         const letter = String.fromCharCode(65 + mi);
+        const state = priceState(m.unit_price);
 
         lines.push(`*[ ${letter} ]*  \`${m.part_number}\``);
         lines.push(`      ${m.description || '-'}`);
-        lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*`);
+        if (state === 'priced') {
+          const subtotal = m.unit_price * item.qty;
+          lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*`);
+        } else if (state === 'contact') {
+          hasContact = true;
+          lines.push(`      📞 *Contact to get quote*`);
+        } else {
+          hasTbd = true;
+          lines.push(`      💰 *TBD*  ×  ${item.qty}  =  *TBD*`);
+        }
         lines.push('');
       });
     } else {
       itemNum++;
       const m = (item.matches && item.matches[0]) || item;
-      if (m.unit_price != null) {
+      const state = priceState(m.unit_price);
+
+      lines.push(`*${itemNum}.*  \`${(state === 'tbd' ? item.part_number : m.part_number) || '-'}\``);
+      lines.push(`      ${m.description || item.description || '-'}`);
+
+      if (state === 'priced') {
         const sub = m.unit_price * item.qty;
         item.subtotal = sub;
         item.unit_price = m.unit_price;
@@ -78,15 +96,18 @@ function buildQuotationText(quoteNumber, items) {
         item.description = m.description || item.description;
         item.price_source = m.price_source || m.source || 'tbd';
         total += sub;
-
-        lines.push(`*${itemNum}.*  \`${item.part_number || '-'}\``);
-        lines.push(`      ${item.description || '-'}`);
-        lines.push(`      💰 ${formatMYR(item.unit_price)}  ×  ${item.qty}  =  *${formatMYR(sub)}*`);
+        lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(sub)}*`);
+      } else if (state === 'contact') {
+        hasContact = true;
+        item.subtotal = null;
+        item.unit_price = 0;
+        item.part_number = m.part_number || item.part_number;
+        item.description = m.description || item.description;
+        item.price_source = m.price_source || m.source || 'contact';
+        lines.push(`      📞 *Contact to get quote*`);
       } else {
         hasTbd = true;
         item.subtotal = null;
-        lines.push(`*${itemNum}.*  \`${item.part_number || '-'}\``);
-        lines.push(`      ${item.description || '-'}`);
         lines.push(`      💰 *TBD*  ×  ${item.qty}  =  *TBD*`);
       }
       lines.push('');
@@ -110,6 +131,14 @@ function buildQuotationText(quoteNumber, items) {
   if (hasTbd) {
     lines.push(`🧾 *TOTAL:* _Partial — some prices TBD_`);
     lines.push(`_Our team will follow up with the complete price._`);
+  } else if (hasContact && !hasMultiple) {
+    if (total > 0) {
+      lines.push(`🧾 *SUBTOTAL:  ${formatMYR(total)}*`);
+      lines.push(`📞 _Some items need a quote — our team will follow up._`);
+    } else {
+      lines.push(`📞 *Please contact us for pricing*`);
+      lines.push(`_Our team will follow up with the quote shortly._`);
+    }
   } else if (!hasMultiple) {
     lines.push(`🧾 *TOTAL:  ${formatMYR(total)}*`);
   } else {
@@ -122,7 +151,11 @@ function buildQuotationText(quoteNumber, items) {
   lines.push('⏰  Valid for 7 days');
   lines.push('💬  Reply to this message for enquiries');
 
-  return { text: lines.join('\n'), total: hasTbd || hasMultiple ? 0 : total, hasTbd: hasTbd || hasMultiple };
+  return {
+    text: lines.join('\n'),
+    total: hasTbd || hasMultiple ? 0 : total,
+    hasTbd: hasTbd || hasMultiple || hasContact
+  };
 }
 
 // Priority: excel (1) → external (2) → manual (3)

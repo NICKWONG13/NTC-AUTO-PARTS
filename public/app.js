@@ -515,7 +515,10 @@ function renderProductsTable(grouped, activeMap) {
     return `<tr>
       <td><strong>${partNumber}</strong><br><small class="muted">${sourceBadges}</small></td>
       <td>${escHtml(activeRecord.description)}</td>
-      <td style="color:${SOURCE_COLOR[activeSource] || 'var(--text)'}"><strong>${fmtMYR(activeRecord.unit_price)}</strong><br><small class="muted">via ${SOURCE_LABEL[activeSource] || '—'}</small></td>
+      <td>${parseFloat(activeRecord.unit_price) > 0
+        ? `<span style="color:${SOURCE_COLOR[activeSource] || 'var(--text)'}"><strong>${fmtMYR(activeRecord.unit_price)}</strong></span><br><small class="muted">via ${SOURCE_LABEL[activeSource] || '—'}</small>`
+        : `<span style="color:#f59e0b"><strong>📞 Contact for quote</strong></span><br><small class="muted">price not set</small>`
+      }</td>
       <td>${activeRecord.stock_qty}</td>
       <td>${fmtDate(activeRecord.updated_at)}</td>
       <td>
@@ -722,32 +725,21 @@ async function importExcel(input, context = 'products') {
     const parseNum = (v) => parseFloat(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
     const parseInt10 = (v) => parseInt(String(v ?? '').replace(/[^0-9]/g, ''), 10) || 0;
 
-    let skippedDead = 0;
-    let fallbackCount = 0;
+    let noPriceCount = 0;
     const products = dataRows
       .map(row => {
-        const sp   = iPrice >= 0 ? parseNum(row[iPrice]) : 0;
-        const cost = iCost  >= 0 ? parseNum(row[iCost])  : 0;
-        const stock = iStock >= 0 ? parseInt10(row[iStock]) : 0;
-        // Use SP 1 when available, else fall back to Avg Cost
-        let unit_price = sp > 0 ? sp : cost;
-        const usedFallback = sp === 0 && cost > 0;
-        if (usedFallback) fallbackCount++;
+        const sp = iPrice >= 0 ? parseNum(row[iPrice]) : 0;
+        if (sp === 0) noPriceCount++;
         return {
           part_number: String(row[iPart] ?? '').trim().toUpperCase(),
           description: String(row[iDesc] ?? '').trim() || '-',
-          unit_price,
-          stock_qty: stock,
-          _dead: unit_price === 0 && stock === 0
+          unit_price: sp, // never fall back to cost — 0 means "Contact for quote"
+          stock_qty:  iStock >= 0 ? parseInt10(row[iStock]) : 0
         };
       })
-      .filter(p => {
-        if (!p.part_number || p.part_number.length <= 1 || !isNaN(p.part_number)) return false;
-        // Skip dead catalog entries (no price AND no stock)
-        if (p._dead) { skippedDead++; return false; }
-        delete p._dead;
-        return true;
-      });
+      // Only reject rows with no valid part number. Import everything else, even
+      // price-0 / stock-0 items — they'll show "Contact to get quote" in UI.
+      .filter(p => p.part_number && p.part_number.length > 1 && isNaN(p.part_number));
 
     if (!products.length) throw new Error('No valid product rows found after parsing');
 
@@ -781,10 +773,8 @@ async function importExcel(input, context = 'products') {
     resultEl.innerHTML = `✓ <strong>${imported} products</strong> imported from <em>${file.name}</em><br>
       <small>Columns — Part: <b>col[${iPart}]</b> | Desc: <b>col[${iDesc}]</b> |
       SP: <b>${iPrice >= 0 ? 'col[' + iPrice + ']' : '(none)'}</b> |
-      Cost fallback: <b>${iCost >= 0 ? 'col[' + iCost + ']' : '(none)'}</b> |
       Stock: <b>${iStock >= 0 ? 'col[' + iStock + ']' : '(none)'}</b></small>
-      ${fallbackCount ? `<br><small style="color:#f59e0b">• ${fallbackCount} items used Avg Cost as fallback (SP 1 blank)</small>` : ''}
-      ${skippedDead ? `<br><small class="muted">• ${skippedDead} dead entries skipped (no price & no stock)</small>` : ''}`;
+      ${noPriceCount ? `<br><small style="color:#f59e0b">• ${noPriceCount} items will show "Contact to get quote" (SP 1 blank)</small>` : ''}`;
 
     refreshExcelStatus({ filename: file.name, imported, time: new Date().toISOString() });
     if (currentTab === 'products') loadProducts();
