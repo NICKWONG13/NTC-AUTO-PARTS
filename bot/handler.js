@@ -19,6 +19,7 @@ XYZ456 | Oil Filter | 1
 
 *Commands:*
 /new – start a guided quote
+/cart – review your current cart
 /done – finish and generate quote
 /cancel – abort current quote
 /myquotes – view your recent quotations`;
@@ -167,10 +168,20 @@ async function saveQuotation(customerId, chatId, quoteNumber, items, total, hasT
 }
 
 // ─── Session helpers (guided /new quote flow) ───────────────────────────
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 async function getSession(telegramId) {
   const { data } = await supabase.from('bot_sessions')
     .select('*').eq('telegram_id', telegramId).limit(1);
-  return (data && data[0]) || null;
+  const row = (data && data[0]) || null;
+  if (!row) return null;
+  // Auto-expire stale sessions
+  const age = Date.now() - new Date(row.updated_at).getTime();
+  if (age > SESSION_TTL_MS) {
+    await clearSession(telegramId);
+    return null;
+  }
+  return row;
 }
 async function setSession(telegramId, state, data) {
   await supabase.from('bot_sessions').upsert({
@@ -185,9 +196,35 @@ async function clearSession(telegramId) {
 
 function renderCart(items) {
   if (!items.length) return '_(empty)_';
-  return items.map((it, i) =>
-    `${i + 1}. \`${it.part_number}\`${it.description ? ' — ' + it.description : ''}  × ${it.qty}`
-  ).join('\n');
+  return items.map((it, i) => {
+    const part = it.part_number && it.part_number !== '?' ? `\`${it.part_number}\`` : '_(no part #)_';
+    return `${i + 1}. ${part}${it.description ? ' — ' + it.description : ''}  × ${it.qty}`;
+  }).join('\n');
+}
+
+// Quick-reply keyboards (tap instead of type)
+const KB = {
+  partStep:  { keyboard: [[{ text: '⏭ Skip part #' }], [{ text: '❌ /cancel' }]],
+               resize_keyboard: true, one_time_keyboard: false },
+  descStep:  { keyboard: [[{ text: '⏭ Skip description' }], [{ text: '❌ /cancel' }]],
+               resize_keyboard: true, one_time_keyboard: false },
+  qtyStep:   { keyboard: [[{ text: '1' }, { text: '2' }, { text: '4' }],
+                          [{ text: '5' }, { text: '10' }, { text: '20' }],
+                          [{ text: '❌ /cancel' }]],
+               resize_keyboard: true, one_time_keyboard: false },
+  addMore:   { keyboard: [[{ text: '✅ /done' }], [{ text: '🛒 /cart' }, { text: '❌ /cancel' }]],
+               resize_keyboard: true, one_time_keyboard: false },
+  remove:    { remove_keyboard: true }
+};
+
+// Map button-label presses to their real command
+function normalizeButton(text) {
+  const t = text.trim();
+  if (t === '⏭ Skip part #' || t === '⏭ Skip description') return '-';
+  if (t === '✅ /done')   return '/done';
+  if (t === '❌ /cancel') return '/cancel';
+  if (t === '🛒 /cart')   return '/cart';
+  return text;
 }
 
 // Load customer's latest pending-selection quotation
@@ -451,22 +488,26 @@ async function processUpdate(bot, update) {
   if (!msg || !msg.text) return;
 
   const chatId = msg.chat.id;
-  const text = msg.text.trim();
+  const rawText = msg.text.trim();
+  const text = normalizeButton(rawText);
   const salesChatId = process.env.SALES_CHAT_ID;
   const isSales = String(msg.chat.id) === String(salesChatId);
 
   try {
-    // ── Guided-quote commands (/new, /done, /cancel) ───────────────
+    // ── Guided-quote commands (/new, /done, /cancel, /cart) ───────────────
     const session = await getSession(msg.from.id);
 
     if (text === '/new' || text === '/quote') {
+      // Cleanly reset if a stale session exists
+      if (session) await clearSession(msg.from.id);
       await setSession(msg.from.id, 'awaiting_part', { items: [] });
       await bot.sendMessage(chatId,
         `📝 *NEW QUOTE — ITEM 1*\n\n` +
         `Please reply with the *PART NUMBER*:\n\n` +
         `_Example: 45022-S9A-A01N1_\n\n` +
-        `• Type /cancel anytime to stop`,
-        { parse_mode: 'Markdown' }
+        `• Tap *⏭ Skip part #* if you don't know it — just describe the part in the next step\n` +
+        `• Tap *❌ /cancel* anytime to stop`,
+        { parse_mode: 'Markdown', reply_markup: KB.partStep }
       );
       return;
     }
@@ -474,32 +515,57 @@ async function processUpdate(bot, update) {
     if (text === '/cancel') {
       if (session) {
         await clearSession(msg.from.id);
-        await bot.sendMessage(chatId, '❌ Quote cancelled.');
+        await bot.sendMessage(chatId, '❌ Quote cancelled.', { reply_markup: KB.remove });
       } else {
-        await bot.sendMessage(chatId, '_No active quote to cancel. Type /new to start._', { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, '_No active quote to cancel. Type /new to start._',
+          { parse_mode: 'Markdown', reply_markup: KB.remove });
       }
+      return;
+    }
+
+    if (text === '/cart') {
+      if (!session || !session.data?.items?.length) {
+        await bot.sendMessage(chatId, '🛒 _Your cart is empty. Type /new to start._', { parse_mode: 'Markdown' });
+        return;
+      }
+      await bot.sendMessage(chatId,
+        `🛒 *Your cart (${session.data.items.length} item${session.data.items.length > 1 ? 's' : ''}):*\n\n` +
+        `${renderCart(session.data.items)}\n\n` +
+        `• Reply with the next *PART NUMBER* to add more\n` +
+        `• Tap *✅ /done* to generate the quote\n` +
+        `• Tap *❌ /cancel* to abort`,
+        { parse_mode: 'Markdown', reply_markup: KB.addMore }
+      );
       return;
     }
 
     if (text === '/done') {
       if (!session || !session.data?.items?.length) {
-        await bot.sendMessage(chatId, '_No items added yet. Type /new to start a quote._', { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, '_No items added yet. Type /new to start a quote._',
+          { parse_mode: 'Markdown', reply_markup: KB.remove });
         return;
       }
       const cartItems = session.data.items.map(it => ({
-        part_number: it.part_number,
-        raw_query: it.raw_query || it.part_number,
+        part_number: it.part_number || '?',
+        raw_query: it.raw_query || it.description || it.part_number,
         description: it.description || null,
         qty: it.qty || 1,
         needsLookup: !it.description
       }));
       await clearSession(msg.from.id);
 
+      await bot.sendMessage(chatId, '⏳ _Generating your quotation…_',
+        { parse_mode: 'Markdown', reply_markup: KB.remove });
+
       const enriched = await enrichDescriptions(cartItems);
       const pricedItems = await lookupPrices(enriched);
       const quoteNumber = await generateQuoteNumber();
       const { text: qText, total, hasTbd } = buildQuotationText(quoteNumber, pricedItems);
       await bot.sendMessage(chatId, qText, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId,
+        `✅ _Quote saved. Our team will follow up shortly._\n` +
+        `Type /new to start another quote.`,
+        { parse_mode: 'Markdown' });
 
       const customerId = await getOrCreateCustomer(msg);
       await saveQuotation(customerId, chatId, quoteNumber, pricedItems, total, hasTbd);
@@ -514,35 +580,55 @@ async function processUpdate(bot, update) {
       const itemNum = (data.items?.length || 0) + 1;
 
       if (session.state === 'awaiting_part') {
-        data.current = { part_number: text.toUpperCase(), raw_query: text };
+        const skip = (text === '-' || text === '?' || text.toLowerCase() === 'unknown');
+        if (!skip && text.length < 2) {
+          await bot.sendMessage(chatId,
+            '⚠️ Part number looks too short. Please type it again, or tap *⏭ Skip part #* if you don\'t know it.',
+            { parse_mode: 'Markdown', reply_markup: KB.partStep });
+          return;
+        }
+        data.current = skip
+          ? { part_number: '?', raw_query: '', _noPart: true }
+          : { part_number: text.toUpperCase(), raw_query: text };
         await setSession(msg.from.id, 'awaiting_desc', data);
         await bot.sendMessage(chatId,
-          `✓ Part #${itemNum}: \`${text}\`\n\n` +
+          (skip
+            ? `✓ Part #${itemNum}: _(no part number — please describe it next)_\n\n`
+            : `✓ Part #${itemNum}: \`${text}\`\n\n`) +
           `Now reply with the *DESCRIPTION*:\n\n` +
-          `_Example: Brake Pad Front_\n\n` +
-          `• Reply \`-\` to skip (we'll auto-fill from catalog)\n` +
-          `• Type /cancel to stop`,
-          { parse_mode: 'Markdown' }
+          `_Example: Brake Pad Front, Honda Civic FD_\n\n` +
+          (skip
+            ? `• Description is *required* when part # is skipped\n`
+            : `• Tap *⏭ Skip description* to auto-fill from catalog\n`) +
+          `• Tap *❌ /cancel* to stop`,
+          { parse_mode: 'Markdown', reply_markup: KB.descStep }
         );
         return;
       }
 
       if (session.state === 'awaiting_desc') {
-        data.current.description = (text.trim() === '-' || text.trim() === '') ? null : text.trim();
+        const skip = (text === '-' || text === '');
+        // If part was skipped, description must be provided
+        if (skip && data.current?._noPart) {
+          await bot.sendMessage(chatId,
+            '⚠️ Since you skipped the part number, please type a description so our team can identify the part.',
+            { parse_mode: 'Markdown', reply_markup: KB.descStep });
+          return;
+        }
+        data.current.description = skip ? null : text.trim();
+        delete data.current._noPart;
         await setSession(msg.from.id, 'awaiting_qty', data);
         await bot.sendMessage(chatId,
           `✓ Description: ${data.current.description || '_(auto-fill from catalog)_'}\n\n` +
-          `Now reply with the *QTY*:\n\n` +
-          `_Example: 2_\n\n` +
-          `• Reply \`-\` or empty for qty 1\n` +
-          `• Type /cancel to stop`,
-          { parse_mode: 'Markdown' }
+          `Now tap or reply with the *QTY*:\n\n` +
+          `_Default is 1 if left blank._`,
+          { parse_mode: 'Markdown', reply_markup: KB.qtyStep }
         );
         return;
       }
 
       if (session.state === 'awaiting_qty') {
-        const qty = parseInt(text.replace(/[^0-9]/g, ''), 10) || 1;
+        const qty = Math.max(1, parseInt(text.replace(/[^0-9]/g, ''), 10) || 1);
         data.current.qty = qty;
         data.items = data.items || [];
         data.items.push(data.current);
@@ -551,13 +637,14 @@ async function processUpdate(bot, update) {
 
         await bot.sendMessage(chatId,
           `✅ Item ${data.items.length} added!\n\n` +
-          `*🛒 Current cart (${data.items.length} item${data.items.length > 1 ? 's' : ''}):*\n` +
+          `*🛒 Cart (${data.items.length} item${data.items.length > 1 ? 's' : ''}):*\n` +
           `${renderCart(data.items)}\n\n` +
           `━━━━━━━━━━━━━━━━━━━━\n\n` +
           `*ITEM ${data.items.length + 1}* — reply with *PART NUMBER* to add another\n\n` +
-          `• /done – generate quotation\n` +
-          `• /cancel – abort`,
-          { parse_mode: 'Markdown' }
+          `• Tap *✅ /done* to generate your quote\n` +
+          `• Tap *🛒 /cart* to review\n` +
+          `• Tap *❌ /cancel* to abort`,
+          { parse_mode: 'Markdown', reply_markup: KB.addMore }
         );
         return;
       }
@@ -739,8 +826,9 @@ async function processUpdate(bot, update) {
         `📝 *NEW QUOTE — ITEM 1*\n\n` +
         `Please reply with the *PART NUMBER*:\n\n` +
         `_Example: 45022-S9A-A01N1_\n\n` +
-        `• Type /cancel anytime to stop`,
-        { parse_mode: 'Markdown' }
+        `• Tap *⏭ Skip part #* if you don't know it\n` +
+        `• Tap *❌ /cancel* anytime to stop`,
+        { parse_mode: 'Markdown', reply_markup: KB.partStep }
       );
       return;
     }
