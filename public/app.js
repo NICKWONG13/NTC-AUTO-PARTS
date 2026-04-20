@@ -654,7 +654,10 @@ async function importExcel(input, context = 'products') {
 
     // ── Header + column detection (mirrors server logic) ───────────────────
     const norm = s => String(s).toLowerCase().replace(/[\s_\-\.()#\/]/g, '');
-    const PRICE_KW = ['price','harga','rate','cost','amt','sellingprice','unitprice','avgcost'];
+    // Preferred (selling) price keywords are checked FIRST so "SP 1" wins
+    // over "Avg Cost(RM)" when both columns exist.
+    const PRICE_PREF = ['sp1','sp2','sp3','sellingprice','unitprice','price','harga','rate'];
+    const PRICE_ALT  = ['avgcost','cost','amt'];
     const STOCK_KW = ['stock','qty','quantity','onhand','baki','balance','qoh','bal'];
     const PART_KW  = ['part','itemcode','itemno','code','item'];
     const DESC_KW  = ['description','itemdesc','desc','keterangan','barang'];
@@ -678,14 +681,23 @@ async function importExcel(input, context = 'products') {
     };
 
     let iPrice = -1, iStock = -1, iPart = -1, iDesc = -1;
+    // Pass 1: preferred selling-price + others
     headerRow.forEach((h, i) => {
       const n = norm(h);
       if (!n) return;
-      if (iPrice < 0 && PRICE_KW.some(k => n.includes(k))) iPrice = i;
+      if (iPrice < 0 && PRICE_PREF.some(k => n.includes(k))) iPrice = i;
       if (iStock < 0 && STOCK_KW.some(k => n.includes(k))) iStock = i;
       if (iPart  < 0 && PART_KW.some(k => n.includes(k))  && looksLikePart(i)) iPart = i;
       if (iDesc  < 0 && DESC_KW.some(k => n.includes(k))) iDesc = i;
     });
+    // Pass 2: fall back to cost columns only if no selling price found
+    if (iPrice < 0) {
+      headerRow.forEach((h, i) => {
+        const n = norm(h);
+        if (!n) return;
+        if (iPrice < 0 && PRICE_ALT.some(k => n.includes(k))) iPrice = i;
+      });
+    }
 
     if (iPart < 0 || iDesc < 0) {
       // Fallback detection by data patterns

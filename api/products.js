@@ -133,7 +133,9 @@ router.post('/import', upload.single('file'), async (req, res) => {
     if (!raw || raw.length < 2) return res.status(400).json({ error: 'Excel file is empty or too short' });
 
     const norm = s => String(s).toLowerCase().replace(/[\s_\-\.()#\/]/g, '');
-    const PRICE_KW = ['price','harga','rate','cost','amt','sellingprice','unitprice','avgcost'];
+    // Preferred = selling price; Alt = cost (only used if selling price not found)
+    const PRICE_PREF = ['sp1','sp2','sp3','sellingprice','unitprice','price','harga','rate'];
+    const PRICE_ALT  = ['avgcost','cost','amt'];
     const STOCK_KW = ['stock','qty','quantity','onhand','baki','balance','qoh','bal'];
     // Removed 'no' / 'bil' — too broad; matches row-counter "No." column. Compound terms still work.
     const PART_KW  = ['part','itemcode','itemno','code','item'];
@@ -174,11 +176,19 @@ router.post('/import', upload.single('file'), async (req, res) => {
     headerRow.forEach((h, i) => {
       const n = norm(h);
       if (!n) return;
-      if (iPrice < 0 && PRICE_KW.some(k => n.includes(k))) iPrice = i;
+      if (iPrice < 0 && PRICE_PREF.some(k => n.includes(k))) iPrice = i;
       if (iStock < 0 && STOCK_KW.some(k => n.includes(k))) iStock = i;
       if (iPart  < 0 && PART_KW.some(k => n.includes(k))  && looksLikePart(i)) iPart = i;
       if (iDesc  < 0 && DESC_KW.some(k => n.includes(k))) iDesc = i;
     });
+    // Fall back to cost column only if no selling price was found
+    if (iPrice < 0) {
+      headerRow.forEach((h, i) => {
+        const n = norm(h);
+        if (!n) return;
+        if (iPrice < 0 && PRICE_ALT.some(k => n.includes(k))) iPrice = i;
+      });
+    }
 
     // Step 3: if part/desc still not found, detect by data patterns
     if (iPart < 0 || iDesc < 0) {
