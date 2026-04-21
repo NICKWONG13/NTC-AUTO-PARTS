@@ -73,7 +73,7 @@ function buildQuotationText(quoteNumber, items) {
           lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*`);
         } else if (state === 'contact') {
           hasContact = true;
-          lines.push(`      🔔 *Contact to get quote*`);
+          lines.push(`      📞 *Contact to get quote*`);
         } else {
           hasTbd = true;
           lines.push(`      💰 *TBD*  ×  ${item.qty}  =  *TBD*`);
@@ -134,9 +134,9 @@ function buildQuotationText(quoteNumber, items) {
   } else if (hasContact && !hasMultiple) {
     if (total > 0) {
       lines.push(`🧾 *SUBTOTAL:  ${formatMYR(total)}*`);
-      lines.push(`🔔 _Some items need a quote — our team will follow up._`);
+      lines.push(`📞 _Some items need a quote — our team will follow up._`);
     } else {
-      lines.push(`🔔 *Please contact us for pricing*`);
+      lines.push(`📞 *Please contact us for pricing*`);
       lines.push(`_Our team will follow up with the quote shortly._`);
     }
   } else if (!hasMultiple) {
@@ -155,13 +155,11 @@ function buildQuotationText(quoteNumber, items) {
   const whatsapp = process.env.NTC_WHATSAPP || '';
   const email    = process.env.NTC_EMAIL    || '';
   const address  = process.env.NTC_ADDRESS  || '';
-  // Using emoji that render colorfully on every Telegram client
-  // (phone-handset 📞 renders as black outline on some Samsung/old-Android skins).
-  if (phone)    lines.push(`🔔  *Call:*         ${phone}`);       // yellow bell — always vivid
-  if (whatsapp) lines.push(`💚  *WhatsApp:*     ${whatsapp}`);    // green heart — brand match
-  if (email)    lines.push(`💌  *Email:*        ${email}`);       // pink love-letter — always color
-  if (address)  lines.push(`📍  *Address:*      ${address}`);     // red pin — always color
-  lines.push(`💬  *Chat here:*    Reply to this message`);        // blue speech bubble
+  if (phone)    lines.push(`📞  *Call:*         ${phone}`);
+  if (whatsapp) lines.push(`📲  *WhatsApp:*     ${whatsapp}`);
+  if (email)    lines.push(`📧  *Email:*        ${email}`);
+  if (address)  lines.push(`📍  *Address:*      ${address}`);
+  lines.push(`💬  *Chat here:*    Reply to this message`);
   lines.push('');
   lines.push('_Thank you for choosing NTC Auto Parts_');
 
