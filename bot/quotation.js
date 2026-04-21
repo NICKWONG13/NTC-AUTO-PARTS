@@ -145,8 +145,8 @@ function buildQuotationText(quoteNumber, items) {
   lines.push('⏰  *Valid for 7 days*');
   lines.push('');
   lines.push('*GET IN TOUCH*');
-  const phone    = process.env.NTC_PHONE    || '';
-  const whatsapp = process.env.NTC_WHATSAPP || '';
+  const phone    = process.env.NTC_PHONE    || '+60 12-769 4888';
+  const whatsapp = process.env.NTC_WHATSAPP || '+60 12-769 4888';
   const email    = process.env.NTC_EMAIL    || '';
   const address  = process.env.NTC_ADDRESS  || '';
   if (phone)    lines.push(`📞  *Call:*         ${phone}`);
