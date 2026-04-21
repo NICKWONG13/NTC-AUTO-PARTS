@@ -148,8 +148,20 @@ function buildQuotationText(quoteNumber, items) {
   lines.push('');
   lines.push(DIVIDER);
   lines.push('');
-  lines.push('⏰  Valid for 7 days');
-  lines.push('💬  Reply to this message for enquiries');
+  lines.push('⏰  *Valid for 7 days*');
+  lines.push('');
+  lines.push('📞 *GET IN TOUCH*');
+  const phone    = process.env.NTC_PHONE    || '';
+  const whatsapp = process.env.NTC_WHATSAPP || '';
+  const email    = process.env.NTC_EMAIL    || '';
+  const address  = process.env.NTC_ADDRESS  || '';
+  if (phone)    lines.push(`☎️  *Call:*  ${phone}`);
+  if (whatsapp) lines.push(`💬  *WhatsApp:*  ${whatsapp}`);
+  if (email)    lines.push(`✉️  *Email:*  ${email}`);
+  if (address)  lines.push(`📍  ${address}`);
+  lines.push(`💭  *Chat:*  Reply directly to this message`);
+  lines.push('');
+  lines.push('🙏  _Thank you for choosing NTC Auto Parts_');
 
   return {
     text: lines.join('\n'),
