@@ -284,17 +284,10 @@ async function getPendingSelection(telegramId) {
 // ─── Notify sales ────────────────────────────────────────────────────────────
 async function notifySales(bot, salesChatId, quoteNumber, customerName, text) {
   if (!salesChatId) return;
-  const base = (process.env.DASHBOARD_URL || 'https://ntc-auto-parts.vercel.app').replace(/\/$/, '');
-  const dashboardUrl = `${base}/#quote=${encodeURIComponent(quoteNumber)}`;
   const notice =
     `🔔 *New Enquiry — ${quoteNumber}*\n` +
     `From: ${customerName}\n\n` +
-    `${text}\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    // Plain URL — Telegram auto-links it. Avoids Markdown [text](url)
-    // conflicts with letter-selection brackets like "[ A ]" in the quote.
-    `📊 Open in Dashboard:\n${dashboardUrl}`;
-  // wrapBot handles Markdown-fallback automatically; just send.
+    `${text}`;
   try {
     await bot.sendMessage(salesChatId, notice, {
       parse_mode: 'Markdown',
