@@ -1,6 +1,36 @@
 const supabase = require('../db/supabase');
 const { generateQuoteNumber, buildQuotationText, lookupPrices } = require('./quotation');
 
+// ─── Reliability wrapper ────────────────────────────────────────────────
+// Patches bot.sendMessage once so that if Telegram rejects a Markdown
+// message (malformed formatting, unbalanced brackets, reserved chars),
+// we retry as plain text instead of silently failing. Prevents the
+// whole class of "bot didn't reply" bugs.
+function wrapBot(bot) {
+  if (bot._ntcWrapped) return bot;
+  const original = bot.sendMessage.bind(bot);
+  bot.sendMessage = async (chatId, text, opts = {}) => {
+    try {
+      return await original(chatId, text, opts);
+    } catch (e) {
+      const desc = e?.response?.body?.description || e?.message || '';
+      const isMarkdownIssue = opts.parse_mode &&
+        /parse|entities|reserved|character|bad request|can.?t find/i.test(desc);
+      if (!isMarkdownIssue) throw e;
+      // Strip Markdown syntax and retry as plain text
+      const plain = String(text).replace(/[*_`]/g, '').replace(/\[([^\]]*)\]\(([^)]*)\)/g, '$1 $2');
+      try {
+        return await original(chatId, plain, { ...opts, parse_mode: undefined });
+      } catch (e2) {
+        console.error('[wrapBot] fallback also failed:', e2.message);
+        throw e2;
+      }
+    }
+  };
+  bot._ntcWrapped = true;
+  return bot;
+}
+
 // ─── Help text ────────────────────────────────────────────────────────────────
 const HELP_TEXT = `👋 Welcome to NTC Auto Parts!
 
@@ -264,27 +294,20 @@ async function notifySales(bot, salesChatId, quoteNumber, customerName, text) {
     // Plain URL — Telegram auto-links it. Avoids Markdown [text](url)
     // conflicts with letter-selection brackets like "[ A ]" in the quote.
     `📊 Open in Dashboard:\n${dashboardUrl}`;
+  // wrapBot handles Markdown-fallback automatically; just send.
   try {
     await bot.sendMessage(salesChatId, notice, {
       parse_mode: 'Markdown',
       disable_web_page_preview: true
     });
   } catch (e) {
-    // If Markdown parse fails (malformed body), retry as plain text so the
-    // notification still gets through.
-    console.error('Failed to notify sales (markdown):', e.message);
-    try {
-      await bot.sendMessage(salesChatId, notice.replace(/[*_`]/g, ''), {
-        disable_web_page_preview: true
-      });
-    } catch (e2) {
-      console.error('Failed to notify sales (plain):', e2.message);
-    }
+    console.error('Failed to notify sales:', e.message);
   }
 }
 
 // ─── Bot setup ───────────────────────────────────────────────────────────────
 function setupHandler(bot) {
+  wrapBot(bot);
   const salesChatId = () => process.env.SALES_CHAT_ID;
   const isSales = (msg) => String(msg.chat.id) === String(salesChatId());
 
@@ -505,6 +528,7 @@ function setupHandler(bot) {
 // Processes a Telegram update synchronously so we can await completion
 // before returning from the webhook — necessary on Vercel.
 async function processUpdate(bot, update) {
+  wrapBot(bot);
   const msg = update.message;
   if (!msg || !msg.text) return;
 
@@ -707,6 +731,19 @@ async function processUpdate(bot, update) {
       return;
     }
 
+    if (isSales && text === '/version') {
+      const sha = (process.env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7);
+      const msgIso = (process.env.VERCEL_GIT_COMMIT_MESSAGE || '').split('\n')[0].slice(0, 80);
+      await bot.sendMessage(chatId,
+        `🔧 *Build info*\n` +
+        `Commit: \`${sha}\`\n` +
+        `Message: ${msgIso || '_(n/a)_'}\n` +
+        `Region: ${process.env.VERCEL_REGION || 'local'}\n` +
+        `Time: ${new Date().toISOString()}`,
+        { parse_mode: 'Markdown' });
+      return;
+    }
+
     if (isSales && text === '/remind') {
       await sendFollowUpReminder(bot, salesChatId);
       return;
@@ -879,6 +916,14 @@ async function processUpdate(bot, update) {
     await notifySales(bot, salesChatId, quoteNumber, customerName, qText);
   } catch (err) {
     console.error('[processUpdate] error:', err.message, err.stack);
+    // Visible alert to sales so failures don't stay hidden in logs
+    try {
+      if (salesChatId) {
+        await bot.sendMessage(salesChatId,
+          `⚠️ Bot error — customer ${msg.from?.id}:\n${String(err.message || err).slice(0, 500)}`
+        );
+      }
+    } catch {}
     try { await bot.sendMessage(chatId, '⚠️ Something went wrong. Please try again or contact us directly.'); } catch {}
   }
 }
