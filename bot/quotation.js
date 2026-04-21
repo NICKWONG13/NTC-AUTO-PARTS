@@ -73,7 +73,7 @@ function buildQuotationText(quoteNumber, items) {
           lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*`);
         } else if (state === 'contact') {
           hasContact = true;
-          lines.push(`      📞 *Contact to get quote*`);
+          lines.push(`      🟠 📞 *Contact to get quote* 🟠`);
         } else {
           hasTbd = true;
           lines.push(`      💰 *TBD*  ×  ${item.qty}  =  *TBD*`);
@@ -134,9 +134,9 @@ function buildQuotationText(quoteNumber, items) {
   } else if (hasContact && !hasMultiple) {
     if (total > 0) {
       lines.push(`🧾 *SUBTOTAL:  ${formatMYR(total)}*`);
-      lines.push(`📞 _Some items need a quote — our team will follow up._`);
+      lines.push(`🟠 📞 _Some items need a quote — our team will follow up._`);
     } else {
-      lines.push(`📞 *Please contact us for pricing*`);
+      lines.push(`🟠 📞 *Please contact us for pricing*`);
       lines.push(`_Our team will follow up with the quote shortly._`);
     }
   } else if (!hasMultiple) {
