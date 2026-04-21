@@ -71,12 +71,11 @@ function buildQuotationText(quoteNumber, items) {
         if (state === 'priced') {
           const subtotal = m.unit_price * item.qty;
           lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*`);
-        } else if (state === 'contact') {
+        } else {
+          // Both "contact" (matched, no price) and "tbd" (no match) → show
+          // Contact to get quote so sales can follow up.
           hasContact = true;
           lines.push(`      📞 *Contact to get quote*`);
-        } else {
-          hasTbd = true;
-          lines.push(`      💰 *TBD*  ×  ${item.qty}  =  *TBD*`);
         }
         lines.push('');
       });
@@ -97,7 +96,9 @@ function buildQuotationText(quoteNumber, items) {
         item.price_source = m.price_source || m.source || 'tbd';
         total += sub;
         lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(sub)}*`);
-      } else if (state === 'contact') {
+      } else {
+        // Both "contact" (match, no price) and "tbd" (no match) →
+        // always show Contact to get quote instead of the cryptic TBD.
         hasContact = true;
         item.subtotal = null;
         item.unit_price = 0;
@@ -105,10 +106,6 @@ function buildQuotationText(quoteNumber, items) {
         item.description = m.description || item.description;
         item.price_source = m.price_source || m.source || 'contact';
         lines.push(`      📞 *Contact to get quote*`);
-      } else {
-        hasTbd = true;
-        item.subtotal = null;
-        lines.push(`      💰 *TBD*  ×  ${item.qty}  =  *TBD*`);
       }
       lines.push('');
     }
@@ -128,10 +125,7 @@ function buildQuotationText(quoteNumber, items) {
     lines.push('');
   }
 
-  if (hasTbd) {
-    lines.push(`🧾 *TOTAL:* _Partial — some prices TBD_`);
-    lines.push(`_Our team will follow up with the complete price._`);
-  } else if (hasContact && !hasMultiple) {
+  if (hasContact && !hasMultiple) {
     if (total > 0) {
       lines.push(`🧾 *SUBTOTAL:  ${formatMYR(total)}*`);
       lines.push(`📞 _Some items need a quote — our team will follow up._`);
