@@ -39,7 +39,7 @@ function buildQuotationText(quoteNumber, items) {
   const DIVIDER = '━━━━━━━━━━━━━━━━━━━━';
   let lines = [];
 
-  lines.push(`📋 *QUOTATION  /  报价单 #${quoteNumber}*`);
+  lines.push(`📋 *QUOTATION  /  报价单  /  SEBUT HARGA #${quoteNumber}*`);
   lines.push(`🗓  ${date}`);
   lines.push('');
   lines.push(DIVIDER);
@@ -57,9 +57,10 @@ function buildQuotationText(quoteNumber, items) {
   items.forEach((item, idx) => {
     if (item.matches && item.matches.length > 1) {
       hasMultiple = true;
-      lines.push(`🔍 *Search / 搜索:* _${item.raw_query || item.part_number}_`);
+      lines.push(`🔍 *Search / 搜索 / Cari:* _${item.raw_query || item.part_number}_`);
       lines.push(`Found *${item.matches.length}* matches — please pick one:`);
       lines.push(`找到 *${item.matches.length}* 个匹配，请选一个：`);
+      lines.push(`Jumpa *${item.matches.length}* padanan — sila pilih satu:`);
       lines.push('');
 
       item.matches.forEach((m, mi) => {
@@ -76,7 +77,7 @@ function buildQuotationText(quoteNumber, items) {
           // Both "contact" (matched, no price) and "tbd" (no match) → show
           // Contact to get quote so sales can follow up.
           hasContact = true;
-          lines.push(`      📞 *Contact to get quote  /  联系报价*`);
+          lines.push(`      📞 *Contact to get quote  /  联系报价  /  Hubungi untuk sebut harga*`);
         }
         lines.push('');
       });
@@ -121,47 +122,54 @@ function buildQuotationText(quoteNumber, items) {
   lines.push('');
 
   if (hasMultiple) {
-    lines.push('📝 *How to order  /  如何下单:*');
+    lines.push('📝 *How to order  /  如何下单  /  Cara tempah:*');
     lines.push('Reply with the letter (A / B / C…) or the full part number.');
     lines.push('回复字母 (A / B / C…) 或完整零件编号。');
+    lines.push('Balas dengan huruf (A / B / C…) atau nombor alat ganti penuh.');
     lines.push('');
   }
 
   if (hasContact && !hasMultiple) {
     if (total > 0) {
-      lines.push(`🧾 *SUBTOTAL  /  小计:  ${formatMYR(total)}*`);
+      lines.push(`🧾 *SUBTOTAL / 小计 / SUB-JUMLAH:  ${formatMYR(total)}*`);
       lines.push(`📞 _Some items need a quote — our team will follow up._`);
       lines.push(`📞 _部分项目需联系报价 — 团队将跟进。_`);
+      lines.push(`📞 _Sesetengah item perlu sebut harga — pasukan akan susuli._`);
     } else {
-      lines.push(`📞 *Please contact us for pricing  /  请联系我们询价*`);
-      lines.push(`_Our team will follow up with the quote shortly._`);
-      lines.push(`_团队将很快跟进提供报价。_`);
+      lines.push(`📞 *Please contact us for pricing*`);
+      lines.push(`📞 *请联系我们询价*`);
+      lines.push(`📞 *Sila hubungi kami untuk harga*`);
+      lines.push(`_Our team will follow up shortly._`);
+      lines.push(`_团队将很快跟进。_`);
+      lines.push(`_Pasukan kami akan susuli tidak lama lagi._`);
     }
   } else if (!hasMultiple) {
-    lines.push(`🧾 *TOTAL  /  总计:  ${formatMYR(total)}*`);
+    lines.push(`🧾 *TOTAL / 总计 / JUMLAH:  ${formatMYR(total)}*`);
   } else {
     lines.push(`🧾 _Total will be confirmed once you choose._`);
     lines.push(`🧾 _选择后将确认总计金额。_`);
+    lines.push(`🧾 _Jumlah akan disahkan setelah anda pilih._`);
   }
 
   lines.push('');
   lines.push(DIVIDER);
   lines.push('');
-  lines.push('⏰  *Valid for 7 days  /  有效期 7 天*');
+  lines.push('⏰  *Valid for 7 days  /  有效期 7 天  /  Sah selama 7 hari*');
   lines.push('');
-  lines.push('*GET IN TOUCH  /  联系我们*');
+  lines.push('*GET IN TOUCH  /  联系我们  /  HUBUNGI KAMI*');
   const phone    = process.env.NTC_PHONE    || '+60 12-769 4888';
   const whatsapp = process.env.NTC_WHATSAPP || '+60 12-769 4888';
   const email    = process.env.NTC_EMAIL    || '';
   const address  = process.env.NTC_ADDRESS  || '';
-  if (phone)    lines.push(`📞  *Call / 电话:*       ${phone}`);
-  if (whatsapp) lines.push(`📲  *WhatsApp:*          ${whatsapp}`);
-  if (email)    lines.push(`📧  *Email / 邮箱:*      ${email}`);
-  if (address)  lines.push(`📍  *Address / 地址:*    ${address}`);
-  lines.push(`💬  *Chat / 聊天:*       Reply to this message  /  直接回复此讯息`);
+  if (phone)    lines.push(`📞  *Call / 电话 / Telefon:*  ${phone}`);
+  if (whatsapp) lines.push(`📲  *WhatsApp:*               ${whatsapp}`);
+  if (email)    lines.push(`📧  *Email / 邮箱 / Emel:*    ${email}`);
+  if (address)  lines.push(`📍  *Address / 地址 / Alamat:* ${address}`);
+  lines.push(`💬  *Chat / 聊天 / Sembang:*  Reply here  /  直接回复  /  Balas di sini`);
   lines.push('');
   lines.push('_Thank you for choosing NTC Auto Parts_');
   lines.push('_感谢选择 NTC AUTO PARTS_');
+  lines.push('_Terima kasih kerana memilih NTC AUTO PARTS_');
 
   return {
     text: lines.join('\n'),

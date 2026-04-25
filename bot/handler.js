@@ -34,27 +34,29 @@ function wrapBot(bot) {
 // ─── Help text ────────────────────────────────────────────────────────────────
 const HELP_TEXT = `👋 *Welcome to NTC Auto Parts!*
 👋 *欢迎使用 NTC AUTO PARTS！*
+👋 *Selamat datang ke NTC Auto Parts!*
 
-*📝 Guided quote (recommended) / 引导报价（推荐）:*
-Type /new and I'll walk you through step by step.
-输入 /new 我会一步步引导您填写：
-  1️⃣  PART NUMBER  /  零件编号
-  2️⃣  DESCRIPTION  /  描述
-  3️⃣  QUANTITY  /  数量
+*📝 Guided quote / 引导报价 / Sebut harga berpandu (recommended / 推荐 / disyorkan):*
+Type /new — I'll walk you through step by step.
+输入 /new — 我会一步步引导您填写。
+Taip /new — saya akan bimbing anda langkah demi langkah.
+  1️⃣  PART NUMBER  /  零件编号  /  NOMBOR ALAT GANTI
+  2️⃣  DESCRIPTION  /  描述  /  KETERANGAN
+  3️⃣  QUANTITY  /  数量  /  KUANTITI
 
-*Quick format (advanced) / 快速格式（进阶）:*
-Send one item per line / 每行一个项目：
+*Quick format / 快速格式 / Format cepat (advanced / 进阶 / lanjutan):*
+Send one item per line / 每行一个项目 / Satu item sebaris:
 \`\`\`
 ABC123 | Brake Pad | 2
 XYZ456 | Oil Filter | 1
 \`\`\`
 
-*Commands / 指令:*
-/new – start a guided quote / 开始引导报价
-/cart – review your current cart / 查看购物车
-/done – finish and generate quote / 完成并生成报价
-/cancel – abort current quote / 取消当前报价
-/myquotes – view your recent quotations / 查看历史报价`;
+*Commands / 指令 / Arahan:*
+/new – guided quote / 开始引导报价 / sebut harga berpandu
+/cart – review cart / 查看购物车 / lihat troli
+/done – finish & generate quote / 完成并生成报价 / selesai & jana sebut harga
+/cancel – abort / 取消 / batal
+/myquotes – recent quotations / 查看历史报价 / sebut harga lalu`;
 
 const SALES_HELP = `*Sales Commands:*
 /remind — Send overdue follow-up list
@@ -542,12 +544,15 @@ async function processUpdate(bot, update) {
       if (session) await clearSession(msg.from.id);
       await setSession(msg.from.id, 'awaiting_part', { items: [] });
       await bot.sendMessage(chatId,
-        `📝 *NEW QUOTE — ITEM 1*  /  *新报价 — 第 1 项*\n\n` +
+        `📝 *NEW QUOTE — ITEM 1*\n` +
+        `📝 *新报价 — 第 1 项*\n` +
+        `📝 *SEBUT HARGA BARU — ITEM 1*\n\n` +
         `Please reply with the *PART NUMBER*\n` +
-        `请输入*零件编号*：\n\n` +
-        `_Example / 例如: 45022-S9A-A01N1_\n\n` +
-        `• Tap *⏭ Skip part #* if you don't know it / 不知道编号请按"跳过"\n` +
-        `• Tap *❌ /cancel* anytime to stop / 随时按取消`,
+        `请输入*零件编号*\n` +
+        `Sila balas dengan *NOMBOR ALAT GANTI*\n\n` +
+        `_Example / 例如 / Contoh: 45022-S9A-A01N1_\n\n` +
+        `• Tap *⏭ Skip part #* if unknown / 不知道编号请按跳过 / tekan langkau jika tidak tahu\n` +
+        `• Tap *❌ /cancel* to stop / 取消 / batal`,
         { parse_mode: 'Markdown', reply_markup: KB.partStep }
       );
       return;
@@ -556,9 +561,12 @@ async function processUpdate(bot, update) {
     if (text === '/cancel') {
       if (session) {
         await clearSession(msg.from.id);
-        await bot.sendMessage(chatId, '❌ Quote cancelled. / 报价已取消。', { reply_markup: KB.remove });
+        await bot.sendMessage(chatId, '❌ Quote cancelled.  /  报价已取消。  /  Sebut harga dibatalkan.', { reply_markup: KB.remove });
       } else {
-        await bot.sendMessage(chatId, '_No active quote to cancel. Type /new to start._\n_目前没有进行中的报价。输入 /new 开始。_',
+        await bot.sendMessage(chatId,
+          '_No active quote to cancel. Type /new to start._\n' +
+          '_目前没有进行中的报价。输入 /new 开始。_\n' +
+          '_Tiada sebut harga aktif. Taip /new untuk mula._',
           { parse_mode: 'Markdown', reply_markup: KB.remove });
       }
       return;
@@ -566,15 +574,20 @@ async function processUpdate(bot, update) {
 
     if (text === '/cart') {
       if (!session || !session.data?.items?.length) {
-        await bot.sendMessage(chatId, '🛒 _Your cart is empty. Type /new to start._\n🛒 _购物车是空的。输入 /new 开始。_', { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId,
+          '🛒 _Your cart is empty. Type /new to start._\n' +
+          '🛒 _购物车是空的。输入 /new 开始。_\n' +
+          '🛒 _Troli kosong. Taip /new untuk mula._',
+          { parse_mode: 'Markdown' });
         return;
       }
       await bot.sendMessage(chatId,
-        `🛒 *Your cart  /  您的购物车 (${session.data.items.length} item${session.data.items.length > 1 ? 's' : ''}):*\n\n` +
+        `🛒 *Your cart  /  购物车  /  Troli  (${session.data.items.length} item${session.data.items.length > 1 ? 's' : ''}):*\n\n` +
         `${renderCart(session.data.items)}\n\n` +
-        `• Reply with the next *PART NUMBER* to add more / 输入下一个零件编号添加\n` +
-        `• Tap *✅ /done* to generate the quote / 生成报价\n` +
-        `• Tap *❌ /cancel* to abort / 取消`,
+        `• Reply with next *PART NUMBER* to add more\n` +
+        `  输入下一个零件编号添加 / Balas dengan NOMBOR ALAT GANTI seterusnya\n` +
+        `• Tap *✅ /done* — generate quote / 生成报价 / jana sebut harga\n` +
+        `• Tap *❌ /cancel* — abort / 取消 / batal`,
         { parse_mode: 'Markdown', reply_markup: KB.addMore }
       );
       return;
@@ -582,7 +595,10 @@ async function processUpdate(bot, update) {
 
     if (text === '/done') {
       if (!session || !session.data?.items?.length) {
-        await bot.sendMessage(chatId, '_No items added yet. Type /new to start a quote._\n_还没有添加项目。输入 /new 开始报价。_',
+        await bot.sendMessage(chatId,
+          '_No items added yet. Type /new to start a quote._\n' +
+          '_还没有添加项目。输入 /new 开始报价。_\n' +
+          '_Belum ada item. Taip /new untuk mula._',
           { parse_mode: 'Markdown', reply_markup: KB.remove });
         return;
       }
@@ -595,7 +611,8 @@ async function processUpdate(bot, update) {
       }));
       await clearSession(msg.from.id);
 
-      await bot.sendMessage(chatId, '⏳ _Generating your quotation… / 正在生成报价…_',
+      await bot.sendMessage(chatId,
+        '⏳ _Generating your quotation… / 正在生成报价… / Menjana sebut harga…_',
         { parse_mode: 'Markdown', reply_markup: KB.remove });
 
       const enriched = await enrichDescriptions(cartItems);
@@ -605,8 +622,9 @@ async function processUpdate(bot, update) {
       await bot.sendMessage(chatId, qText, { parse_mode: 'Markdown' });
       await bot.sendMessage(chatId,
         `✅ _Quote saved. Our team will follow up shortly._\n` +
-        `✅ _报价已保存，团队将很快跟进。_\n\n` +
-        `Type /new to start another quote. / 输入 /new 开始下一个报价。`,
+        `✅ _报价已保存，团队将很快跟进。_\n` +
+        `✅ _Sebut harga disimpan. Pasukan kami akan susuli tidak lama lagi._\n\n` +
+        `Type /new to start another / 输入 /new 开始下一个 / Taip /new untuk mula lagi`,
         { parse_mode: 'Markdown' });
 
       const customerId = await getOrCreateCustomer(msg);
@@ -625,8 +643,9 @@ async function processUpdate(bot, update) {
         const skip = (text === '-' || text === '?' || text.toLowerCase() === 'unknown');
         if (!skip && text.length < 2) {
           await bot.sendMessage(chatId,
-            '⚠️ Part number looks too short. Please type it again, or tap *⏭ Skip part #*.\n' +
-            '⚠️ 零件编号太短，请重新输入，或按"跳过"。',
+            '⚠️ Part number too short. Type again, or tap *⏭ Skip part #*.\n' +
+            '⚠️ 零件编号太短，请重新输入，或按"跳过"。\n' +
+            '⚠️ Nombor alat ganti terlalu pendek. Cuba lagi, atau tekan *⏭ Skip*.',
             { parse_mode: 'Markdown', reply_markup: KB.partStep });
           return;
         }
@@ -636,15 +655,18 @@ async function processUpdate(bot, update) {
         await setSession(msg.from.id, 'awaiting_desc', data);
         await bot.sendMessage(chatId,
           (skip
-            ? `✓ Part #${itemNum}: _(no part number — please describe it next)_\n  _无零件编号 — 请输入描述_\n\n`
+            ? `✓ Part #${itemNum}: _(no part number — please describe it next)_\n` +
+              `  _无零件编号 — 请输入描述_\n` +
+              `  _Tiada nombor — sila huraikan dalam langkah seterusnya_\n\n`
             : `✓ Part #${itemNum}: \`${text}\`\n\n`) +
           `Now reply with the *DESCRIPTION*\n` +
-          `请输入*描述*：\n\n` +
-          `_Example / 例如: Brake Pad Front, Honda Civic FD_\n\n` +
+          `请输入*描述*\n` +
+          `Sila balas dengan *KETERANGAN*\n\n` +
+          `_Example / 例如 / Contoh: Brake Pad Front, Honda Civic FD_\n\n` +
           (skip
-            ? `• Description is *required* / 必须填写描述\n`
-            : `• Tap *⏭ Skip description* to auto-fill from catalog / 按"跳过"自动填充\n`) +
-          `• Tap *❌ /cancel* to stop / 取消`,
+            ? `• Description is *required* / 必须填写描述 / Wajib diisi\n`
+            : `• Tap *⏭ Skip description* — auto-fill from catalog / 按跳过自动填充 / langkau untuk autoisi\n`) +
+          `• Tap *❌ /cancel* to stop / 取消 / batal`,
           { parse_mode: 'Markdown', reply_markup: KB.descStep }
         );
         return;
@@ -652,11 +674,11 @@ async function processUpdate(bot, update) {
 
       if (session.state === 'awaiting_desc') {
         const skip = (text === '-' || text === '');
-        // If part was skipped, description must be provided
         if (skip && data.current?._noPart) {
           await bot.sendMessage(chatId,
-            '⚠️ Since you skipped the part number, please type a description so our team can identify the part.\n' +
-            '⚠️ 您跳过了零件编号，请输入描述以便我们识别。',
+            '⚠️ Since you skipped the part number, please type a description.\n' +
+            '⚠️ 您跳过了零件编号，请输入描述。\n' +
+            '⚠️ Anda telah langkau nombor alat ganti — sila taip keterangan.',
             { parse_mode: 'Markdown', reply_markup: KB.descStep });
           return;
         }
@@ -664,10 +686,11 @@ async function processUpdate(bot, update) {
         delete data.current._noPart;
         await setSession(msg.from.id, 'awaiting_qty', data);
         await bot.sendMessage(chatId,
-          `✓ Description / 描述: ${data.current.description || '_(auto-fill from catalog / 自动填充)_'}\n\n` +
+          `✓ Description / 描述 / Keterangan: ${data.current.description || '_(auto-fill / 自动填充 / autoisi)_'}\n\n` +
           `Now tap or reply with the *QTY*\n` +
-          `请输入*数量*：\n\n` +
-          `_Default is 1 if left blank / 留空默认 1。_`,
+          `请输入*数量*\n` +
+          `Sila balas dengan *KUANTITI*\n\n` +
+          `_Default 1 if blank / 留空默认 1 / Lalai 1 jika kosong_`,
           { parse_mode: 'Markdown', reply_markup: KB.qtyStep }
         );
         return;
@@ -682,14 +705,16 @@ async function processUpdate(bot, update) {
         await setSession(msg.from.id, 'awaiting_part', data);
 
         await bot.sendMessage(chatId,
-          `✅ Item ${data.items.length} added! / 已添加第 ${data.items.length} 项！\n\n` +
-          `*🛒 Cart / 购物车 (${data.items.length} item${data.items.length > 1 ? 's' : ''}):*\n` +
+          `✅ Item ${data.items.length} added!  /  已添加第 ${data.items.length} 项！  /  Item ${data.items.length} ditambah!\n\n` +
+          `*🛒 Cart / 购物车 / Troli (${data.items.length}):*\n` +
           `${renderCart(data.items)}\n\n` +
           `━━━━━━━━━━━━━━━━━━━━\n\n` +
-          `*ITEM ${data.items.length + 1} / 第 ${data.items.length + 1} 项* — reply with *PART NUMBER* / 输入零件编号添加\n\n` +
-          `• Tap *✅ /done* to generate your quote / 生成报价\n` +
-          `• Tap *🛒 /cart* to review / 查看购物车\n` +
-          `• Tap *❌ /cancel* to abort / 取消`,
+          `*ITEM ${data.items.length + 1}* — reply with next *PART NUMBER*\n` +
+          `*第 ${data.items.length + 1} 项* — 输入零件编号继续\n` +
+          `*ITEM ${data.items.length + 1}* — balas NOMBOR ALAT GANTI seterusnya\n\n` +
+          `• Tap *✅ /done* — generate quote / 生成报价 / jana sebut harga\n` +
+          `• Tap *🛒 /cart* — review / 查看 / lihat\n` +
+          `• Tap *❌ /cancel* — abort / 取消 / batal`,
           { parse_mode: 'Markdown', reply_markup: KB.addMore }
         );
         return;
@@ -880,13 +905,15 @@ async function processUpdate(bot, update) {
     if (looksLikeSentence) {
       await bot.sendMessage(chatId,
         `👋 Looks like you're asking in a sentence.\n` +
-        `👋 看起来您在用句子询问。\n\n` +
-        `For accurate pricing, please type /new and I'll guide you field by field:\n` +
+        `👋 看起来您在用句子询问。\n` +
+        `👋 Nampaknya anda menaip dalam ayat penuh.\n\n` +
+        `For accurate pricing, type /new — I'll guide you field by field:\n` +
         `请输入 /new，我会逐栏引导您填写：\n` +
-        `  1️⃣  PART NUMBER  /  零件编号\n` +
-        `  2️⃣  DESCRIPTION  /  描述\n` +
-        `  3️⃣  QTY  /  数量\n\n` +
-        `Or send it directly like / 或直接发送格式：\n` +
+        `Taip /new — saya akan bimbing anda langkah demi langkah:\n` +
+        `  1️⃣  PART NUMBER  /  零件编号  /  NOMBOR ALAT GANTI\n` +
+        `  2️⃣  DESCRIPTION  /  描述  /  KETERANGAN\n` +
+        `  3️⃣  QTY  /  数量  /  KUANTITI\n\n` +
+        `Or send directly / 或直接发送 / Atau hantar terus:\n` +
         `\`ABC123 | Brake Pad | 2\``,
         { parse_mode: 'Markdown' }
       );
@@ -908,8 +935,9 @@ async function processUpdate(bot, update) {
     // If anything came back unmatched, suggest the guided form
     if (hasTbd) {
       await bot.sendMessage(chatId,
-        `💡 _Some items didn't match. Try /new to enter part number, description, and qty step by step._\n` +
-        `💡 _部分项目未匹配。试试 /new 一步步输入零件编号、描述和数量。_`,
+        `💡 _Some items didn't match. Try /new to enter part #, description and qty step by step._\n` +
+        `💡 _部分项目未匹配。试试 /new 一步步输入零件编号、描述和数量。_\n` +
+        `💡 _Beberapa item tidak sepadan. Cuba /new untuk isi langkah demi langkah._`,
         { parse_mode: 'Markdown' }
       );
     }
