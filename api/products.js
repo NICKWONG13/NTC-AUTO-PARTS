@@ -9,6 +9,84 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const SOURCES = ['excel', 'external', 'manual'];
 
+// ─── Excel parsing helper (shared by /import and /sync) ─────────────────────
+// Parses an XLSX buffer and returns an array of {part_number, description,
+// unit_price, stock_qty} rows ready for upsert. Auto-detects header row and
+// columns the same way the client-side importer does.
+function parseExcelBuffer(buffer) {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(sheet, { defval: '', header: 1 });
+  if (!raw || raw.length < 2) throw new Error('Excel file is empty or too short');
+
+  const norm = s => String(s).toLowerCase().replace(/[\s_\-\.()#\/]/g, '');
+  const PRICE_PREF = ['sp1','sp2','sp3','sellingprice','unitprice','price','harga','rate'];
+  const PRICE_ALT  = ['avgcost','cost','amt'];
+  const STOCK_KW = ['stock','qty','quantity','onhand','baki','balance','qoh','bal'];
+  const PART_KW  = ['part','itemcode','itemno','code','item'];
+  const DESC_KW  = ['description','itemdesc','desc','keterangan','barang'];
+
+  let headerRowIdx = 0;
+  for (let i = 0; i < Math.min(raw.length, 30); i++) {
+    const named = raw[i].filter(c => c && isNaN(c) && String(c).trim().length > 1);
+    if (named.length >= 3) { headerRowIdx = i; break; }
+  }
+  const headerRow = raw[headerRowIdx];
+  const dataRows  = raw.slice(headerRowIdx + 1);
+
+  const samples = dataRows.slice(0, 40).filter(r => r.some(c => c !== ''));
+  const looksLikePart = (ci) => {
+    const vals = samples.map(r => String(r[ci] ?? '').trim()).filter(Boolean);
+    if (!vals.length) return false;
+    if (vals.every((v, i) => Number(v) === i + 1)) return false;
+    const numCount = vals.filter(v => !isNaN(Number(v))).length;
+    if (numCount / vals.length > 0.8) return false;
+    return true;
+  };
+
+  let iPrice = -1, iStock = -1, iPart = -1, iDesc = -1;
+  headerRow.forEach((h, i) => {
+    const n = norm(h);
+    if (!n) return;
+    if (iPrice < 0 && PRICE_PREF.some(k => n.includes(k))) iPrice = i;
+    if (iStock < 0 && STOCK_KW.some(k => n.includes(k))) iStock = i;
+    if (iPart  < 0 && PART_KW.some(k => n.includes(k))  && looksLikePart(i)) iPart = i;
+    if (iDesc  < 0 && DESC_KW.some(k => n.includes(k))) iDesc = i;
+  });
+  if (iPrice < 0) {
+    headerRow.forEach((h, i) => {
+      const n = norm(h);
+      if (!n) return;
+      if (iPrice < 0 && PRICE_ALT.some(k => n.includes(k))) iPrice = i;
+    });
+  }
+
+  if (iPart < 0 || iDesc < 0) {
+    throw new Error(`Cannot detect Part Number or Description columns. Headers: ${headerRow.filter(h => h).join(', ')}`);
+  }
+
+  return dataRows
+    .map(row => ({
+      part_number: String(row[iPart] ?? '').trim().toUpperCase(),
+      description: String(row[iDesc] ?? '').trim() || '-',
+      unit_price: iPrice >= 0 ? (parseFloat(String(row[iPrice]).replace(/[^0-9.]/g, '')) || 0) : 0,
+      stock_qty:  iStock >= 0 ? (parseInt(String(row[iStock]).replace(/[^0-9]/g, ''), 10) || 0) : 0
+    }))
+    .filter(p => p.part_number && p.part_number.length > 1 && isNaN(p.part_number));
+}
+
+// ─── OneDrive shared-link helpers ────────────────────────────────────────────
+function isOneDriveUrl(url) {
+  return /(?:1drv\.ms|onedrive\.live\.com|sharepoint\.com)\//i.test(url || '');
+}
+// Convert a OneDrive shared "view" link to a direct-download URL using the
+// public Graph shares endpoint — works for "Anyone with the link" sharing.
+function oneDriveDirectDownload(url) {
+  const b64 = Buffer.from(url, 'utf8').toString('base64')
+    .replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+  return `https://api.onedrive.com/v1.0/shares/u!${b64}/root/content`;
+}
+
 // Log price/stock changes to price_history table
 async function logPriceChanges(incoming, source) {
   if (!incoming || incoming.length === 0) return;
@@ -324,34 +402,62 @@ router.post('/import-batch', async (req, res) => {
   }
 });
 
-// POST sync from external system → source = 'external'
+// POST sync from external source → source = 'external'
+// Supports three URL flavors:
+//   1. JSON REST API   → response is a JSON array of products
+//   2. OneDrive shared link (1drv.ms / onedrive.live.com)  → Excel file
+//   3. Direct https://...  .xlsx URL                        → Excel file
 router.post('/sync', async (req, res) => {
-  // Read from DB settings first, fall back to .env
   const apiUrl = await getSetting('ext_api_url', 'EXT_API_URL');
   const apiKey = await getSetting('ext_api_key', 'EXT_API_KEY');
 
   if (!apiUrl) return res.status(400).json({ error: 'External API URL not configured. Set it in Settings tab.' });
 
   try {
-    const headers = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    let products = [];
+    let mode = 'json';
 
-    const response = await fetch(apiUrl, { headers });
-    if (!response.ok) throw new Error(`External API returned ${response.status}`);
-
-    const externalData = await response.json();
-    if (!Array.isArray(externalData)) throw new Error('External API must return a JSON array');
-
-    const products = externalData
-      .map(item => ({
+    // ── OneDrive path ──────────────────────────────────────────────────
+    if (isOneDriveUrl(apiUrl)) {
+      mode = 'onedrive';
+      const downloadUrl = oneDriveDirectDownload(apiUrl);
+      const r = await fetch(downloadUrl);
+      if (!r.ok) throw new Error(`OneDrive returned ${r.status}. Make sure the file is shared as "Anyone with the link can view".`);
+      const buffer = Buffer.from(await r.arrayBuffer());
+      products = parseExcelBuffer(buffer);
+    }
+    // ── Direct XLSX URL path ───────────────────────────────────────────
+    else if (/\.xlsx?(?:\?|$)/i.test(apiUrl)) {
+      mode = 'xlsx';
+      const headers = {};
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+      const r = await fetch(apiUrl, { headers });
+      if (!r.ok) throw new Error(`Excel URL returned ${r.status}`);
+      const buffer = Buffer.from(await r.arrayBuffer());
+      products = parseExcelBuffer(buffer);
+    }
+    // ── JSON REST API path ─────────────────────────────────────────────
+    else {
+      const headers = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+      const response = await fetch(apiUrl, { headers });
+      if (!response.ok) throw new Error(`External API returned ${response.status}`);
+      const externalData = await response.json();
+      if (!Array.isArray(externalData)) throw new Error('External API must return a JSON array');
+      products = externalData.map(item => ({
         part_number: String(item.part_number || '').trim().toUpperCase(),
-        source: 'external',
         description: String(item.description || '').trim() || '-',
         unit_price: parseFloat(item.unit_price) || 0,
-        stock_qty: parseInt(item.stock_qty, 10) || 0,
-        updated_at: new Date().toISOString()
-      }))
-      .filter(p => p.part_number);
+        stock_qty: parseInt(item.stock_qty, 10) || 0
+      })).filter(p => p.part_number);
+    }
+
+    // Tag with source + timestamp before upsert
+    products = products.map(p => ({
+      ...p,
+      source: 'external',
+      updated_at: new Date().toISOString()
+    }));
 
     // Log price changes before upserting
     await logPriceChanges(products, 'external');
@@ -373,7 +479,7 @@ router.post('/sync', async (req, res) => {
       { key: 'ext_api_last_count', value: String(synced), updated_at: new Date().toISOString() }
     ], { onConflict: 'key' });
 
-    res.json({ synced, total: products.length, source: 'external' });
+    res.json({ synced, total: products.length, source: 'external', mode });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
