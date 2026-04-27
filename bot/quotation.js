@@ -72,7 +72,11 @@ function buildQuotationText(quoteNumber, items) {
         lines.push(`      ${m.description || '-'}`);
         if (state === 'priced') {
           const subtotal = m.unit_price * item.qty;
-          lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*`);
+          const stock = Number(m.stock_qty || 0);
+          const stockTag = stock > 0
+            ? `   ✅ *${stock} in stock*`
+            : `   ⏳ _back-order_`;
+          lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*${stockTag}`);
         } else {
           // Both "contact" (matched, no price) and "tbd" (no match) → show
           // Contact to get quote so sales can follow up.
@@ -97,7 +101,9 @@ function buildQuotationText(quoteNumber, items) {
         item.description = m.description || item.description;
         item.price_source = m.price_source || m.source || 'tbd';
         total += sub;
-        lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(sub)}*`);
+        const stock = Number(m.stock_qty || 0);
+        const stockTag = stock > 0 ? `   ✅ *${stock} in stock*` : `   ⏳ _back-order_`;
+        lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(sub)}*${stockTag}`);
       } else {
         // Both "contact" (match, no price) and "tbd" (no match) →
         // always show Contact to get quote instead of the cryptic TBD.
@@ -198,7 +204,7 @@ async function lookupPrices(parsedItems) {
   for (let start = 0; start < 200000; start += PAGE) {
     const { data, error } = await supabase
       .from('price_lookup')
-      .select('part_number, description, unit_price, source')
+      .select('part_number, description, unit_price, stock_qty, source')
       .range(start, start + PAGE - 1);
     if (error) break;
     if (!data || data.length === 0) break;
@@ -225,11 +231,27 @@ async function lookupPrices(parsedItems) {
   const rawMap     = {}; all.forEach(r => { rawMap[r.rawKey]     = r; });
   const compactMap = {}; all.forEach(r => { compactMap[r.compactKey] = r; });
 
-  const byPrice = (a, b) => (a.unit_price || 0) - (b.unit_price || 0);
+  // Tier-based ranking: priced + stocked beats priced-only beats no-price.
+  // Customer always sees real, ready-to-sell options first.
+  //   0 = has price AND has stock  (best)
+  //   1 = has price but out of stock
+  //   2 = no price, has stock      (rare)
+  //   3 = no price, no stock       (placeholder/back-order)
+  const tierOf = (r) => {
+    const hasPrice = Number(r.unit_price || 0) > 0;
+    const hasStock = Number(r.stock_qty  || 0) > 0;
+    return (hasPrice ? 0 : 2) + (hasStock ? 0 : 1);
+  };
+  const byPriority = (a, b) => {
+    const ta = tierOf(a), tb = tierOf(b);
+    if (ta !== tb) return ta - tb;            // tier first
+    return (a.unit_price || 0) - (b.unit_price || 0); // then cheapest
+  };
   const toOutput = r => ({
     part_number:  r.part_number.trim(),
     description:  r.description,
     unit_price:   r.unit_price,
+    stock_qty:    r.stock_qty,
     price_source: r.source
   });
 
@@ -274,8 +296,14 @@ async function lookupPrices(parsedItems) {
         for (const threshold of [1.0, 0.75, 0.6]) {
           const hits = scored.filter(x => x.score >= threshold);
           if (hits.length) {
+            // Sort by: relevance score → tier (priced+stock first) → cheapest
             matches = hits
-              .sort((a, b) => (b.score - a.score) || ((a.r.unit_price || 0) - (b.r.unit_price || 0)))
+              .sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                const ta = tierOf(a.r), tb = tierOf(b.r);
+                if (ta !== tb) return ta - tb;
+                return (a.r.unit_price || 0) - (b.r.unit_price || 0);
+              })
               .slice(0, MAX_MATCHES_PER_QUERY)
               .map(x => x.r);
             break;
@@ -291,7 +319,7 @@ async function lookupPrices(parsedItems) {
       return { ...item, matches: [], unit_price: null, price_source: 'tbd' };
     }
 
-    matches = matches.sort(byPrice).slice(0, MAX_MATCHES_PER_QUERY).map(toOutput);
+    matches = matches.sort(byPriority).slice(0, MAX_MATCHES_PER_QUERY).map(toOutput);
 
     // If single match → populate top-level fields too (for DB save + simple rendering)
     if (matches.length === 1) {
