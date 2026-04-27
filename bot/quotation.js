@@ -72,11 +72,7 @@ function buildQuotationText(quoteNumber, items) {
         lines.push(`      ${m.description || '-'}`);
         if (state === 'priced') {
           const subtotal = m.unit_price * item.qty;
-          const stock = Number(m.stock_qty || 0);
-          const stockTag = stock > 0
-            ? `   ✅ *${stock} in stock*`
-            : `   ⏳ _back-order_`;
-          lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*${stockTag}`);
+          lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(subtotal)}*`);
         } else {
           // Both "contact" (matched, no price) and "tbd" (no match) → show
           // Contact to get quote so sales can follow up.
@@ -101,9 +97,7 @@ function buildQuotationText(quoteNumber, items) {
         item.description = m.description || item.description;
         item.price_source = m.price_source || m.source || 'tbd';
         total += sub;
-        const stock = Number(m.stock_qty || 0);
-        const stockTag = stock > 0 ? `   ✅ *${stock} in stock*` : `   ⏳ _back-order_`;
-        lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(sub)}*${stockTag}`);
+        lines.push(`      💰 ${formatMYR(m.unit_price)}  ×  ${item.qty}  =  *${formatMYR(sub)}*`);
       } else {
         // Both "contact" (match, no price) and "tbd" (no match) →
         // always show Contact to get quote instead of the cryptic TBD.
