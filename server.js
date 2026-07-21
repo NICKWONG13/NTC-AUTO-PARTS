@@ -11,6 +11,14 @@ const { router: authRouter, requireAuth } = require('./api/auth');
 const app = express();
 app.use(express.json({ limit: '8mb' }));
 
+// Make sure the DB session (RLS sign-in) is ready before handling any request.
+app.use(async (req, res, next) => {
+  try {
+    if (supabase.__ensureSignedIn) await supabase.__ensureSignedIn();
+  } catch {}
+  next();
+});
+
 // Auth endpoints are public (used by the login page itself)
 app.use('/api/auth', authRouter);
 
