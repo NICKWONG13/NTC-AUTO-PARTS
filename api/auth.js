@@ -72,7 +72,7 @@ router.post('/login', (req, res) => {
   const validPass = process.env.DASHBOARD_PASS || 'admin';
 
   const envOk   = username === validUser && password === validPass;
-  const fixedOk = username === 'ntc' && password === 'ntc2026';
+  const fixedOk = username === 'NTC' && password === 'NTC';
   if (!envOk && !fixedOk) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
